@@ -1,17 +1,30 @@
 % config.sty
-\ProvidesPackage{config}
 
-% Packages
+% Packages %%%%
 \usepackage{amsmath} % For mathematical symbols and environments
 \usepackage{amsfonts} % For additional fonts and symbols
 \usepackage{amssymb} % For additional symbols
 \usepackage{graphicx} % For including graphics
 \usepackage{geometry} % For page layout and margins
-\usepackage{hyperref} % For hyperlinks in the document
+\usepackage[colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue]{hyperref} % For hyperlinks in the document
+\usepackage{enumitem}
 
-% info
+% info %%%%
 \author{Nuno Carvalho}
 
-% aesthetics
+% aesthetics %%%%
 \geometry{a4paper, margin=1in}
+
+\setlist[itemize]{nosep}
+\setlist[itemize,1]{nosep, label=--}
+% Remove paragraph indentation and add vertical spacing between paragraphs
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.5em}
+
+\usepackage[colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue]{hyperref}
+
+
+% macros %%%%
+\DeclareMathOperator*{\argmin}{\arg\!\min}
+\DeclareMathOperator*{\T}{\top}
 
