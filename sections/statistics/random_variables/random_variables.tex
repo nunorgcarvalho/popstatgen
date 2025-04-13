@@ -1,0 +1,135 @@
+\documentclass[12pt]{article}
+
+% loads config.sty
+\makeatletter
+\def\input@path{{../../../}}
+\makeatother
+\usepackage{config}
+
+\title{Random Variables}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Expected Value}
+
+The expected value of a random variable is the mean of its instantiated values.
+It can be thought of as the average of all possible values of the variable, weighed by the probability of observing those values.
+For a discrete random variable, it is given by:
+$$ E[X] = \sum_{i=1}^{n} x_i P(X=x_i) $$
+Where $x_i$ are the possible values of the random variable $X$ and $P(X=x_i)$ is the probability of observing that value.
+
+For a continuous random variable, it is given by:
+$$ E[X] = \int_{-\infty}^{\infty} x f(x) dx $$
+Where $f(x)$ is the probability density function of the random variable $X$.
+
+\subsection{Properties}
+
+Expected value is a linear operator, meaning that it satisfies the following properties:
+\begin{itemize}
+    \item $E[aX + b] = aE[X] + b$ for any constants $a$ and $b$.
+    \item $E[X + Y] = E[X] + E[Y]$ for any two random variables $X$ and $Y$.
+    \item $E[XY] = E[X]E[Y]$ if $X$ and $Y$ are independent random variables.
+\end{itemize}
+
+\section{Variance}
+
+The variance of a random variable is the mean squared distance of its instantiated values from its mean.
+It is given by:
+
+$$ Var[X] = E[ (X - E[X])^2] $$
+
+It is also equivalent to:
+
+\begin{align*}
+    Var[X] &= E[ (X - E[X])^2] \\
+    &= E[X^2] - 2 E[X] E[X] + E[X]^2 \\
+    &= E[X^2] - E[X]^2
+\end{align*}
+
+Therefore, the variance of a random variable is equal to the difference in the expected values of the random variable squared and the variable itself.
+
+\subsection{\texorpdfstring{Case where $E[X] = 0$}{Case where E[X] = 0}}
+In the special case where $E[X] = 0$, the variance simplifies to:
+
+$$ Var[X] = E[X^2] $$
+
+\subsection{Standard deviation}
+
+The standard deviation is the square root of the variance:
+
+$$ \sigma = \sqrt{Var[X]} $$
+
+It can be interepreted in the same units as the random variable itself.
+
+\subsection{Properties}
+
+$$ Var[aX + b] = a^2 Var[X] $$
+    
+Where $a$ and $b$ are constants.
+This can be derived by:
+
+\begin{align*}
+    Var[aX + b] &= E[(aX + b)^2] - E[aX + b]^2 \\
+    &= E[a^2 X^2 + 2abX + b^2] - (aE[X] + b)^2 \\
+    &= a^2 E[X^2] + 2abE[X] + b^2 - (a^2 E[X]^2 + 2abE[X] + b^2) \\
+    &= a^2 E[X^2] - a^2 E[X]^2 \\
+    &= a^2 (E[X^2] - E[X]^2) \\
+    &= a^2 Var[X]
+\end{align*}
+
+\section{Covariance}
+The covariance of two random variables is a measure of how much the two variables vary together.
+It is given by:
+$$ Cov[X,Y] = E[(X - E[X])(Y - E[Y])] $$
+It can also be expressed as:
+
+\begin{align*}
+    Cov[X,Y] &= E[(X - E[X])(Y - E[Y])] \\
+    &= E[XY - E[X]Y - E[Y]X + E[X]E[Y]] \\
+    &= E[XY] - E[X]E[Y] - E[Y]E[X] + E[X]E[Y] \\
+    &= E[XY] - E[X]E[Y]
+\end{align*}
+
+The covariance of a variable with itself is equivalent to its variance:
+\begin{align*}
+    Cov[X,X] &= E[(X - E[X])(X - E[X])] \\
+    &= E[(X - E[X])^2] \\
+    &= Var[X]
+\end{align*}
+
+\subsection{\texorpdfstring{Case where $E[X] = E[Y] = 0$}{Case where E[X] = E[Y] = 0}}
+In the special case where $E[X] = 0$ and $E[Y] = 0$, the covariance simplifies to:
+
+$$ Cov[X,Y] = E[XY] $$
+
+\section{Correlation}
+
+Correlation is a standardized measure describing the association between two random variables.
+There are multiple measures of correlation, although the most commonly used is the Pearson correlation coefficient.
+
+\subsection{Pearson correlation coefficient}
+
+The Pearson correlation coefficient, denoted by $\rho$, standardizes the covariance of two random variables X and Y by dividing it by the product of their standard deviations. That is:
+
+$$
+\rho_{X,Y} =
+\frac{Cov[X,Y]}{\sigma_X \sigma_Y} =
+\frac{E[(X - E[X])(Y - E[Y])]}
+{\sqrt{E[ (X - E[X])^2]} \sqrt{E[ (Y - E[Y])^2]}}
+$$
+
+\subsection{Case where X and Y are standardized}
+
+In the special case where $E[X] = 0$ and $E[Y] = 0$, the Pearson correlation coefficient simplifies to:
+
+$$ \rho_{X,Y} = \frac{E[XY]}{\sqrt{E[X^2]} \sqrt{E[Y^2]}} $$
+
+If $ Var[X] = Var[Y] = 1$, then the correlation coefficient further simplifies to:
+
+$$ \rho_{X,Y} = E[XY] $$
+
+Which is equivalent to the covariance between $X$ and $Y$ in this case.
+
+\end{document}
