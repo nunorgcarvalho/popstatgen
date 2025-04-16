@@ -5,6 +5,7 @@
 \def\input@path{{../../../}}
 \makeatother
 \usepackage{config}
+\usepackage{macros}
 
 \title{Heritability}
 \date{\today}
@@ -28,16 +29,16 @@ Where:
     \begin{itemize}
         \item $N$: number of samples.
     \end{itemize}
-    \item $Z$: normalized genotypes for causal SNPs.
+    \item $Z$: normalized genotypes for causal variants.
     $N \times M$ matrix.
     \begin{itemize}
-        \item $M$: number of causal SNPs.
+        \item $M$: number of causal variants.
         \item Normalized according to
         $Z_i =  \frac{Z'_i - 2 f_i}{\sqrt{2 f_i (1 - f_i)}}$.
         \begin{itemize}
             \item $Z'$: allele dosages, taking on values of 0, 1, 2.
-            \item $f_i$: true population allele frequency for SNP $i$.
-            \item Such that for each row (SNP), $E[Z_i] = 0$ and $Var[Z_i] = 1$.
+            \item $f_i$: true population allele frequency for variant $i$.
+            \item Such that for each row (variant), $E[Z_i] = 0$ and $Var[Z_i] = 1$.
         \end{itemize}
     \end{itemize}
     \item $\beta$: per-normalized-genotype causal effects.

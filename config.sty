@@ -2,13 +2,13 @@
 %\ProvidesPackage{config}
 
 % Packages %%%%
-\usepackage{amsmath} % For mathematical symbols and environments
-\usepackage{amsfonts} % For additional fonts and symbols
-\usepackage{amssymb} % For additional symbols
-\usepackage{graphicx} % For including graphics
-\usepackage{geometry} % For page layout and margins
-\usepackage[colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue]{hyperref} % For hyperlinks in the document
-\usepackage{enumitem}
+\RequirePackage{amsmath} % For mathematical symbols and environments
+\RequirePackage{amsfonts} % For additional fonts and symbols
+\RequirePackage{amssymb} % For additional symbols
+\RequirePackage{graphicx} % For including graphics
+\RequirePackage{geometry} % For page layout and margins
+\RequirePackage[colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue]{hyperref} % For hyperlinks in the document
+\RequirePackage{enumitem}
 
 % info %%%%
 \author{Nuno Carvalho}
@@ -20,12 +20,4 @@
 
 % Remove paragraph indentation and add vertical spacing between paragraphs
 \setlength{\parindent}{0pt}
-\setlength{\parskip}{0.7em}
-
-\usepackage[colorlinks=true, linkcolor=blue, urlcolor=blue, citecolor=blue]{hyperref}
-
-
-% macros %%%%
-\DeclareMathOperator*{\argmin}{\arg\!\min}
-\DeclareMathOperator*{\T}{\top}
-
+\setlength{\parskip}{0.75em}
