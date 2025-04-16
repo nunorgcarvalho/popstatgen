@@ -14,7 +14,7 @@
 \maketitle
 
 \section{SNP Heritability}
-These derications are based on the Methods of [\href{https://www.nature.com/articles/ng.608}{Yang et al., 2010}]. 
+These derivations are based on the Methods of [\href{https://www.nature.com/articles/ng.608}{Yang et al., 2010}]. 
 
 \subsection{Phenotype model}
 We can define a quantitative phenotype $y$ as:
@@ -59,7 +59,8 @@ Where:
         \end{itemize}
     \end{itemize}
 \end{itemize}
-We assume $Z$, $\beta$, and $\epsilon$ are all independent from each other. We can define the genetic effects as a single term, $g = Z \beta$, meaning that:
+We assume $Z$, $\beta$, and $\epsilon$ are all independent from each other.
+We can define the genetic effects as a single term, $g = Z \beta$, meaning that:
 \begin{equation*}
 y = g + \epsilon
 \quad\mathrm{where}\quad
@@ -78,10 +79,10 @@ By making use of the independence between terms, we can define the variance-cova
     &= (Z Z^{\T}) \frac{\sigma_{g}^2}{M} + I \sigma_{\epsilon}^2 \\
     &= G \sigma_{g}^2 + I \sigma_{\epsilon}^2 \\
 \end{align*}
-Where we define $G = \frac{Z Z^{\T}}{M}$ as the $N \times N$ genetic relationship matrix (GRM) between individuals. The $G_{ii}$ element is the variance of individual $i$'s normalized genotype vector, while the $G_{ij}$ element is the covariance of individuals $i$ and $j$'s normalized genotype vectors.
+Where we define $G = \frac{Z Z^{\T}}{M}$ as the $N \times N$ genetic relationship matrix (GRM) between individuals.
+The $G_{ii}$ element is the variance of individual $i$'s normalized genotype vector, while the $G_{ij}$ element is the covariance of individuals $i$ and $j$'s normalized genotype vectors.
 
 Narrow-sense heritability is defined as the proportion of phenotypic variance, $\sigma_P^2$, explained by additive genetic effects:
-
 $$ h^2 = \frac{\sigma_{g}^2}{\sigma_P^2} = \frac{\sigma_{g}^2}{\sigma_{g}^2 + \sigma_{\epsilon}^2} $$
 
 \end{document}
