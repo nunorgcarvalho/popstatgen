@@ -50,6 +50,44 @@ It is also equivalent to:
 
 Therefore, the variance of a random variable is equal to the difference in the expected values of the random variable squared and the variable itself.
 
+\subsection{Properties}
+
+Largely taken from \href{https://en.wikipedia.org/wiki/Algebra_of_random_variables}{this wikipedia article}. See below for definitions of covariance.
+
+\subsubsection{Scalars and constants}
+$$ Var[aX + b] = a^2 Var[X] $$
+    
+Where $a$ and $b$ are constants.
+This can be derived by:
+\begin{align*}
+    Var[aX + b] &= E[(aX + b)^2] - E[aX + b]^2 \\
+    &= E[a^2 X^2 + 2abX + b^2] - (aE[X] + b)^2 \\
+    &= a^2 E[X^2] + 2abE[X] + b^2 - (a^2 E[X]^2 + 2abE[X] + b^2) \\
+    &= a^2 E[X^2] - a^2 E[X]^2 \\
+    &= a^2 (E[X^2] - E[X]^2) \\
+    &= a^2 Var[X]
+\end{align*}
+
+\subsubsection{Addition and subtraction}
+$$ Var[X + Y] = Var[X] + 2 Cov[X,Y] + Var[Y] $$
+
+For subtraction, note that $Cov[X,-Y] = - Cov[X,Y]$.
+
+If $X$ and $Y$ are independent, then $Cov[X,Y]=0$, so:
+$$ Var[X + Y] = Var[X - Y] = Var[X] + Var[Y] $$
+
+\subsubsection{Multiplication and division}
+If $X$ and $Y$ are independent from each other:
+\begin{align*}
+    Var[X Y] &= E[X^2] E[Y^2] - (E[X] E[Y])^2 \\
+    &= Var[X] Var[Y] + Var[X] E[Y]^2 + Var[Y] E[X]^2
+\end{align*}
+
+Additionally, if $E[X] = E[Y] = 0$, then:
+$$ Var[X Y] = Var[X] Var[Y] $$
+
+For division, note that $Var[X / Y] = Var[(X) (1 / Y)] $.
+
 \subsection{\texorpdfstring{Case where $E[X] = 0$}{Case where E[X] = 0}}
 In the special case where $E[X] = 0$, the variance simplifies to:
 
@@ -62,22 +100,6 @@ The standard deviation is the square root of the variance:
 $$ \sigma = \sqrt{Var[X]} $$
 
 It can be interepreted in the same units as the random variable itself.
-
-\subsection{Properties}
-
-$$ Var[aX + b] = a^2 Var[X] $$
-    
-Where $a$ and $b$ are constants.
-This can be derived by:
-
-\begin{align*}
-    Var[aX + b] &= E[(aX + b)^2] - E[aX + b]^2 \\
-    &= E[a^2 X^2 + 2abX + b^2] - (aE[X] + b)^2 \\
-    &= a^2 E[X^2] + 2abE[X] + b^2 - (a^2 E[X]^2 + 2abE[X] + b^2) \\
-    &= a^2 E[X^2] - a^2 E[X]^2 \\
-    &= a^2 (E[X^2] - E[X]^2) \\
-    &= a^2 Var[X]
-\end{align*}
 
 \section{Covariance}
 The covariance of two random variables is a measure of how much the two variables vary together.
