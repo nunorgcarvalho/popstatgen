@@ -1,0 +1,87 @@
+\documentclass[12pt]{article}
+
+% loads config.sty
+\makeatletter
+\def\input@path{{../../../}}
+\makeatother
+\usepackage{config}
+
+\title{Heritability}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\section{SNP Heritability}
+These derications are based on the Methods of [\href{https://www.nature.com/articles/ng.608}{Yang et al., 2010}]. 
+
+\subsection{Phenotype model}
+We can define a quantitative phenotype $y$ as:
+$$ y = Z \beta + \epsilon $$
+
+Where:
+\begin{itemize}
+    \item $y$: phenotypes.
+    $N \times 1$ vector.
+    Centered so that $E[y]=0$.
+    \begin{itemize}
+        \item $N$: number of samples.
+    \end{itemize}
+    \item $Z$: normalized genotypes for causal SNPs.
+    $N \times M$ matrix.
+    \begin{itemize}
+        \item $M$: number of causal SNPs.
+        \item Normalized according to
+        $Z_i =  \frac{Z'_i - 2 f_i}{\sqrt{2 f_i (1 - f_i)}}$.
+        \begin{itemize}
+            \item $Z'$: allele dosages, taking on values of 0, 1, 2.
+            \item $f_i$: true population allele frequency for SNP $i$.
+            \item Such that for each row (SNP), $E[Z_i] = 0$ and $Var[Z_i] = 1$.
+        \end{itemize}
+    \end{itemize}
+    \item $\beta$: per-normalized-genotype causal effects.
+    $M \times 1$ vector.
+    \begin{itemize}
+        \item Assume infinitesimal model.
+        \item Drawn from $\beta \sim \mathcal{N}(0, I \sigma_{\beta}^2)$.
+        \begin{itemize}
+            \item $I$: $M \times M$ identity matrix.
+            \item $\sigma_{\beta}^2$: variance of causal effects.
+        \end{itemize}
+    \end{itemize}
+    \item $\epsilon$: residual effects (i.e. error or noise term). $N \times 1$ vector.
+    \begin{itemize}
+        \item Drawn from $\epsilon \sim \mathcal{N}(0, I \sigma_{\epsilon}^2)$.
+        \begin{itemize}
+            \item $I$: $N \times N$ identity matrix.
+            \item $\sigma_{\epsilon}^2$: residual variance.
+        \end{itemize}
+    \end{itemize}
+\end{itemize}
+We assume $Z$, $\beta$, and $\epsilon$ are all independent from each other. We can define the genetic effects as a single term, $g = Z \beta$, meaning that:
+\begin{equation*}
+y = g + \epsilon
+\quad\mathrm{where}\quad
+g \sim \mathcal{N}(0, I \sigma_{g}^2)
+\quad\mathrm{where}\quad
+\sigma_{g}^2 = M \sigma_{\beta}^2
+\end{equation*}
+We interpret $\sigma_{g}^2$ as variance of total additive genetic effects on the phenotype.
+
+\subsection{Variance of the phenotype}
+By making use of the independence between terms, we can define the variance-covariance matrix of $y$ as:
+\begin{align*}
+    Var[y] &= Var[Z \beta + \epsilon] \\
+    &= Var[Z] Var[\beta] + Var[\epsilon] \\
+    &= (Z Z^{\T}) \sigma_{\beta}^2 + I \sigma_{\epsilon}^2 \\
+    &= (Z Z^{\T}) \frac{\sigma_{g}^2}{M} + I \sigma_{\epsilon}^2 \\
+    &= G \sigma_{g}^2 + I \sigma_{\epsilon}^2 \\
+\end{align*}
+Where we define $G = \frac{Z Z^{\T}}{M}$ as the $N \times N$ genetic relationship matrix (GRM) between individuals. The $G_{ii}$ element is the variance of individual $i$'s normalized genotype vector, while the $G_{ij}$ element is the covariance of individuals $i$ and $j$'s normalized genotype vectors.
+
+Narrow-sense heritability is defined as the proportion of phenotypic variance, $\sigma_P^2$, explained by additive genetic effects:
+
+$$ h^2 = \frac{\sigma_{g}^2}{\sigma_P^2} = \frac{\sigma_{g}^2}{\sigma_{g}^2 + \sigma_{\epsilon}^2} $$
+
+\end{document}
