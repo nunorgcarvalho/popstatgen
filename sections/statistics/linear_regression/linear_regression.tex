@@ -21,109 +21,109 @@ Largely adapted from the \href{https://en.wikipedia.org/wiki/Generalized_least_s
 \subsection{Model definition}
 
 In Generalized Least Squares (GLS), we define an outcome's mean to be a linear function of a set of predictors:
-$$ y = X \beta + \epsilon $$
+$$ \by = \bX \pmb{\beta} + \bepsilon $$
 
 Where:
 
 \begin{itemize}
-    \item $y$: outcome vector. $N \times 1$
+    \item $\by$: outcome vector. $N \times 1$
     \begin{itemize}
         \item $N$: number of samples
     \end{itemize}
-    \item $X$: design matrix. $N \times K$ matrix
+    \item $\bX$: design matrix. $N \times K$ matrix
     \begin{itemize}
         \item $K$: number of predictors
     \end{itemize}
-    \item $\beta$ : coefficients vector. $K \times 1$ vector
-    \item $\epsilon$ : error term. $N \times 1$ vector
+    \item $\bbeta$ : coefficients vector. $K \times 1$ vector
+    \item $\bepsilon$ : error term. $N \times 1$ vector
 \end{itemize}
 
-Because of our conditional mean definition earlier, the error term, $\epsilon$, has a mean of zero for a given set of predictor values ($X$):
-$$ E [\epsilon | X ] = 0 $$
+Because of our conditional mean definition earlier, the error term, $\bepsilon$, has a mean of zero for a given set of predictor values ($\bX$):
+$$ \E [\bepsilon | \bX ] = \B{0} $$
 
-We also assume that the variance of the error term given $X$ is described by an invertible $N \times N$ covariance matrix, $\Omega$:
-$$ Cov[ \epsilon | X ] = \Omega $$
+We also assume that the variance of the error term given $\bX$ is described by an invertible $N \times N$ covariance matrix, $\bOmega$:
+$$ \Cov[ \bepsilon | \bX ] = \bOmega $$
 
-We further assume that the error term follows a multivariate normal distribution with mean 0 and covariance $\Omega$:
-$$ \epsilon \sim \mathcal{N} (0, \Omega) $$
+We further assume that the error term follows a multivariate normal distribution with mean 0 and covariance $\bOmega$:
+$$ \bepsilon \sim \N (\B{0}, \bOmega) $$
 
 And so it follows that:
-$$ y \sim \mathcal{N} (X \beta, \Omega) $$
+$$ \by \sim \N (\bX \bbeta, \bOmega) $$
 
 
 
 
 
-\subsection[Least squares estimate of beta]{Least squares estimate of $\beta$}
+\subsection[Least squares estimate of beta]{Least squares estimate of $\bbeta$}
 
-We denote a candidate estimate for the $\beta$ vector as $b$ and define its residual vector as $ y - X b $. The goal of GLS is to find the estimate of $\beta$ that maximizes the likelihood of the data given the above model, which we can calculate using the \href{https://en.wikipedia.org/wiki/Multivariate_normal_distribution}{probability density function of a multivariate normal distribution}:
+We denote a candidate estimate for the $\bbeta$ vector as $\bb$ and define its residual vector as $ \by - \bX \bb $. The goal of GLS is to find the estimate of $\bbeta$ that maximizes the likelihood of the data given the above model, which we can calculate using the \href{https://en.wikipedia.org/wiki/Multivariate_normal_distribution}{probability density function of a multivariate normal distribution}:
 
 $$
-\frac{1}{\sqrt{(2 \pi)^K |\Sigma| }}
-\exp{(-\frac{1}{2}(x - \mu)^{\T} \Sigma^{-1} (x - \mu))}
+\frac{1}{\sqrt{(2 \pi)^K |\bSigma| }}
+\exp{(-\frac{1}{2}(\bx - \bmu)^{\T} \bSigma^{-1} (\bx - \bmu))}
 $$
 
-We can plug in $\Sigma = \Omega$, $x = y$, and $\mu = X b$. The $b$ that maximizes this likelihood function will be the same that minimizes the inside of the exponent (without the negative), which is also the squared Mahalanobis length of the residual vector:
+We can plug in $\bSigma = \bOmega$, $\bx = \by$, and $\bmu = \bX \bb$. The $\bb$ that maximizes this likelihood function will be the same that minimizes the inside of the exponent (without the negative), which is also the squared Mahalanobis length of the residual vector:
 
-$$ \hat{\beta} = \argmin_b ~ (y - Xb)^{\T} \Omega^{-1} (y - Xb) $$
+$$ \hat{\bbeta} = \argmin_b ~ (\by - \bX \bb)^{\T} \bOmega^{-1} (\by - \bX \bb) $$
 
 Through matrix algebra, this is equivalent to:
 
 \begin{align*}
-    \hat{\beta} &= \argmin_b ~ (y - Xb)^{\T} \Omega^{-1} (y - Xb) \\
-    &= \argmin_b ~ y^{\T} \Omega^{-1} y - y^{\T} \Omega^{-1} Xb - (Xb)^{\T} \Omega^{-1} y + (Xb)^{\T} \Omega^{-1} Xb \\
-    &= \argmin_b ~ y^{\T} \Omega^{-1} y + (Xb)^{\T} \Omega^{-1} (Xb) - 2(Xb)^{\T} \Omega^{-1} y
+    \hat{\bbeta} &= \argmin_b ~ (\by - \bX \bb)^{\T} \bOmega^{-1} (\by - \bX \bb) \\
+    &= \argmin_b ~ \by^{\T} \bOmega^{-1} \by - \by^{\T} \bOmega^{-1} \bX \bb - (\bX \bb)^{\T} \bOmega^{-1} \by + (\bX \bb)^{\T} \bOmega^{-1} \bX \bb \\
+    &= \argmin_b ~ \by^{\T} \bOmega^{-1} \by + (\bX \bb)^{\T} \bOmega^{-1} (\bX \bb) - 2(\bX \bb)^{\T} \bOmega^{-1} \by
 \end{align*}
 
-We can use calculus to solve for the $b$ that minimizes this expression by taking the partial derivative with respect to $b$ and solving for 0:
+We can use calculus to solve for the $\bb$ that minimizes this expression by taking the partial derivative with respect to $\bb$ and solving for 0:
 
 \begin{align*}
-    0 &= \frac{\partial}{\partial b} [ y^{\T} \Omega^{-1} y + (Xb)^{\T} \Omega^{-1} (Xb) - 2(Xb)^{\T} \Omega^{-1} y ]\\
-    &=  2X^{\T} \Omega^{-1} X \hat{\beta} - 2X^{\T} \Omega^{-1} y
+    \B{0} &= \frac{\partial}{\partial \bb} [ \by^{\T} \bOmega^{-1} \by + (\bX \bb)^{\T} \bOmega^{-1} (\bX \bb) - 2(\bX \bb)^{\T} \bOmega^{-1} \by ]\\
+    &=  2X^{\T} \bOmega^{-1} \bX \hat{\bbeta} - 2X^{\T} \bOmega^{-1} \by
 \end{align*}
 
 Which yields:
-$$ \hat{\beta} = (X^{\T} \Omega^{-1} X)^{-1} X^{\T} \Omega^{-1} y $$
+$$ \hat{\bbeta} = (\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1} \by $$
 
 \subsubsection{Specific case of Ordinary Least Squares}
 
-Note that in Ordinary Least Squares (OLS), the covariance matrix is an identity matrix, $\Omega = I$. That is, the residuals are uncorrelated with each other. This simplifies the above equation to:
+Note that in Ordinary Least Squares (OLS), the covariance matrix is an identity matrix, $\bOmega = I$. That is, the residuals are uncorrelated with each other. This simplifies the above equation to:
 
 \begin{align*}
-    \hat{\beta} &= (X^{\T} \Omega^{-1} X)^{-1} X^{\T} \Omega^{-1} y \\
-    &= (X^{\T} I X)^{-1} X^{\T} I^{-1} y \\
-    &= (X^{\T} X)^{-1} X^{\T} y
+    \hat{\bbeta} &= (\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1} \by \\
+    &= (\bX^{\T} I \bX)^{-1} \bX^{\T} I^{-1} \by \\
+    &= (\bX^{\T} \bX)^{-1} \bX^{\T} \by
 \end{align*}
 
 
 
-\subsection[Variance of beta-hat]{Variance of $\hat{\beta}$}
+\subsection[Variance of beta-hat]{Variance of $\hat{\bbeta}$}
 
-To get the variance of the $\hat{\beta}$ estimate, we only need to focus on the variance of $y$, as all other terms are not random variables. $Var[y] = \Omega$ since $\epsilon$ is independent of $X \beta$, as shown below:
-
-\begin{align*}
-    Var[y] &= Var[X \beta + \epsilon] \\
-    &= Var[X \beta] + Var[\epsilon] \\
-    &= 0 + E[ Var[\epsilon | X] ] + Var[ E[\epsilon | X]] \\
-    &= E[ \Omega ] + Var[ 0 ] \\ 
-    &= \Omega
-\end{align*}
-
-Let's define the scalar $A = (X^{\T} \Omega^{-1} X)^{-1} X^{\T} \Omega^{-1}$, such that $\hat{\beta} = A y$. Furthermore, note that since $\Omega$ is a covariance matrix, it (and its inverse) is symmetric: $\Omega = \Omega^{\T}$. The same symmetry property applies to $X^{\T} \Omega^{-1} X$. We can then solve:
+To get the variance of the $\hat{\bbeta}$ estimate, we only need to focus on the variance of $\by$, as all other terms are not random variables. $\Var[\by] = \bOmega$ since $\bepsilon$ is independent of $\bX \bbeta$, as shown below:
 
 \begin{align*}
-    Var[ \hat{\beta} ] &= Var[(X^{\T} \Omega^{-1} X)^{-1} X^{\T} \Omega^{-1} y] \\
-    &= Var[A y] \\
-    &= A Var[y] A^{\T} \\
-    &= A \Omega A^{\T} \\
-    &= (X^{\T} \Omega^{-1} X)^{-1} X^{\T} \Omega^{-1} \Omega ((X^{\T} \Omega^{-1} X)^{-1} X^{\T} \Omega^{-1})^{\T} \\
-    &= (X^{\T} \Omega^{-1} X)^{-1} X^{\T} \Omega^{-1} \Omega \Omega^{-1} X (X^{\T} \Omega^{-1} X)^{-1} \\
-    &= (X^{\T} \Omega^{-1} X)^{-1} (X^{\T} \Omega^{-1} X) (X^{\T} \Omega^{-1} X)^{-1}
+    \Var[\by] &= \Var[\bX \bbeta + \bepsilon] \\
+    &= \Var[\bX \bbeta] + \Var[\bepsilon] \\
+    &= \B{0} + \E[ \Var[\bepsilon | \bX] ] + \Var[ \E[\bepsilon | \bX]] \\
+    &= \E[ \bOmega ] + \Var[ \B{0} ] \\ 
+    &= \bOmega
 \end{align*}
 
-We can define $B = X^{\T} \Omega^{-1} X$, allowing us to simplify the above equation, $B^{-1} B B^{-1} = B^{-1}$, yielding:
+Let's define $bA = (\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1}$, such that $\hat{\bbeta} = \bA \by$. Furthermore, note that since $\bOmega$ is a covariance matrix, it (and its inverse) is symmetric: $\bOmega = \bOmega^{\T}$. The same symmetry property applies to $\bX^{\T} \bOmega^{-1} \bX$. We can then solve:
 
-$$ Var[ \hat{\beta} ] = (X^{\T} \Omega^{-1} X)^{-1} $$
+\begin{align*}
+    \Var[ \hat{\bbeta} ] &= \Var[(\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1} \by] \\
+    &= \Var[\bA \by] \\
+    &= \bA \Var[\by] \bA^{\T} \\
+    &= \bA \bOmega \bA^{\T} \\
+    &= (\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1} \bOmega ((\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1})^{\T} \\
+    &= (\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1} \bOmega \bOmega^{-1} \bX (\bX^{\T} \bOmega^{-1} \bX)^{-1} \\
+    &= (\bX^{\T} \bOmega^{-1} \bX)^{-1} (\bX^{\T} \bOmega^{-1} \bX) (\bX^{\T} \bOmega^{-1} \bX)^{-1}
+\end{align*}
+
+We can define $\bB = \bX^{\T} \bOmega^{-1} \bX$, allowing us to simplify the above equation, $\bB^{-1} \bB \bB^{-1} = \bB^{-1}$, yielding:
+
+$$ \Var[ \hat{\bbeta} ] = (\bX^{\T} \bOmega^{-1} \bX)^{-1} $$
 
 
 

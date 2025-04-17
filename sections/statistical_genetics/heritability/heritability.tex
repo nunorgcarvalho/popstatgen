@@ -19,71 +19,71 @@ These derivations are based on the Methods of [\href{https://www.nature.com/arti
 
 \subsection{Phenotype model}
 We can define a quantitative phenotype $y$ as:
-$$ y = Z \beta + \epsilon $$
+$$ \by = \bX_c \bbeta + \bepsilon $$
 
 Where:
 \begin{itemize}
-    \item $y$: phenotypes.
+    \item $\by$: phenotypes.
     $N \times 1$ vector.
-    Centered so that $E[y]=0$.
+    Centered so that $\E[\by]=0$.
     \begin{itemize}
         \item $N$: number of samples.
     \end{itemize}
-    \item $Z$: normalized genotypes for causal variants.
-    $N \times M$ matrix.
+    \item $\bX_c$: normalized genotypes for causal variants.
+    $N \times M_c$ matrix.
     \begin{itemize}
-        \item $M$: number of causal variants.
+        \item $M_c$: number of causal variants.
         \item Normalized according to
-        $Z_i =  \frac{Z'_i - 2 f_i}{\sqrt{2 f_i (1 - f_i)}}$.
+        $\bX_{c,i} =  \frac{\bX'_{c,i} - 2 f_i}{\sqrt{2 f_i (1 - f_i)}}$.
         \begin{itemize}
-            \item $Z'$: allele dosages, taking on values of 0, 1, 2.
+            \item $\bX_c'$: allele dosages, taking on values of 0, 1, 2.
             \item $f_i$: true population allele frequency for variant $i$.
-            \item Such that for each row (variant), $E[Z_i] = 0$ and $Var[Z_i] = 1$.
+            \item Such that for each row (variant), $\E[\bX_{c,i}] = 0$ and $\Var[\bX_{c,i}] = 1$.
         \end{itemize}
     \end{itemize}
-    \item $\beta$: per-normalized-genotype causal effects.
-    $M \times 1$ vector.
+    \item $\bbeta$: per-normalized-genotype causal effects.
+    $M_c \times 1$ vector.
     \begin{itemize}
         \item Assume infinitesimal model.
-        \item Drawn from $\beta \sim \mathcal{N}(0, I \sigma_{\beta}^2)$.
+        \item Drawn from $\bbeta \sim \N(\B{0}, \bI \sigma_{\beta}^2)$.
         \begin{itemize}
-            \item $I$: $M \times M$ identity matrix.
+            \item $\bI$: $M_c \times M_c$ identity matrix.
             \item $\sigma_{\beta}^2$: variance of causal effects.
         \end{itemize}
     \end{itemize}
-    \item $\epsilon$: residual effects (i.e. error or noise term). $N \times 1$ vector.
+    \item $\bepsilon$: residual effects (i.e. error or noise term). $N \times 1$ vector.
     \begin{itemize}
-        \item Drawn from $\epsilon \sim \mathcal{N}(0, I \sigma_{\epsilon}^2)$.
+        \item Drawn from $\bepsilon \sim \N(0, \bI \vareps)$.
         \begin{itemize}
-            \item $I$: $N \times N$ identity matrix.
-            \item $\sigma_{\epsilon}^2$: residual variance.
+            \item $\bI$: $N \times N$ identity matrix.
+            \item $\vareps$: residual variance.
         \end{itemize}
     \end{itemize}
 \end{itemize}
-We assume $Z$, $\beta$, and $\epsilon$ are all independent from each other.
-We can define the genetic effects as a single term, $g = Z \beta$, meaning that:
+We assume $\bX_c$, $\bbeta$, and $\bepsilon$ are all independent from each other.
+We can define the genetic effects as a single term, $\bg = \bX_c \bbeta$, meaning that:
 \begin{equation*}
-y = g + \epsilon
+\by = \bg + \bepsilon
 \quad\mathrm{where}\quad
-g \sim \mathcal{N}(0, I \sigma_{g}^2)
+\bg \sim \N(0, I \varg)
 \quad\mathrm{where}\quad
-\sigma_{g}^2 = M \sigma_{\beta}^2
+\varg = M_c \sigma_{\beta}^2
 \end{equation*}
-We interpret $\sigma_{g}^2$ as variance of total additive genetic effects on the phenotype.
+We interpret $\varg$ as variance of total additive genetic effects on the phenotype.
 
 \subsection{Variance of the phenotype}
-By making use of the independence between terms, we can define the variance-covariance matrix of $y$ as:
+By making use of the independence between terms, we can define the variance-covariance matrix of $\by$ as:
 \begin{align*}
-    Var[y] &= Var[Z \beta + \epsilon] \\
-    &= Var[Z] Var[\beta] + Var[\epsilon] \\
-    &= (Z Z^{\T}) \sigma_{\beta}^2 + I \sigma_{\epsilon}^2 \\
-    &= (Z Z^{\T}) \frac{\sigma_{g}^2}{M} + I \sigma_{\epsilon}^2 \\
-    &= G \sigma_{g}^2 + I \sigma_{\epsilon}^2 \\
+    \Var[\by] &= \Var[\bX_c \bbeta + \bepsilon] \\
+    &= \Var[\bX_c] \Var[\bbeta] + \Var[\bepsilon] \\
+    &= (\bX_c \bX_c^{\T}) \varg + \bI \vareps \\
+    &= (\bX_c \bX_c^{\T}) \frac{\varg}{M_c} + \bI \vareps \\
+    &= \bG \varg + \bI \vareps \\
 \end{align*}
-Where we define $G = \frac{Z Z^{\T}}{M}$ as the $N \times N$ genetic relationship matrix (GRM) between individuals.
+Where we define $\bG = \frac{\bX_c \bX_c^{\T}}{M_c}$ as the $N \times N$ genetic relationship matrix (GRM) between individuals.
 The $G_{ii}$ element is the variance of individual $i$'s normalized genotype vector, while the $G_{ij}$ element is the covariance of individuals $i$ and $j$'s normalized genotype vectors.
 
 Narrow-sense heritability is defined as the proportion of phenotypic variance, $\sigma_P^2$, explained by additive genetic effects:
-$$ h^2 = \frac{\sigma_{g}^2}{\sigma_P^2} = \frac{\sigma_{g}^2}{\sigma_{g}^2 + \sigma_{\epsilon}^2} $$
+$$ h^2 = \frac{\varg}{\sigma_P^2} = \frac{\varg}{\varg + \vareps} $$
 
 \end{document}

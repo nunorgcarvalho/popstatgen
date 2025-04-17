@@ -2,12 +2,48 @@
 
 % Packages macros explicitly depend on
 \RequirePackage{amsmath, amssymb}
+\RequirePackage{bm}
 
 % Math operators
 \DeclareMathOperator*{\argmin}{arg\,min}
 
 % Shorthand symbols
 \newcommand{\T}{^\intercal}
+\newcommand{\N}{\mathcal{N}}
 
-% Bold symbols (math mode)
+\newcommand{\E}{\mathrm{E}} % expected value
+\newcommand{\Var}{\mathrm{Var}} % variance
+\newcommand{\Cov}{\mathrm{Cov}} % covariance
+
+\newcommand{\varg}{\sigma_g^2} % genetic variance
+\newcommand{\vareps}{\sigma_{\epsilon}^2} % genetic variance
+
+
+% Bold symbols (math mode) %%%%
 \newcommand{\B}[1]{\mathbf{#1}} % bolds anything, math mode
+
+\newcommand{\bA}{\mathbf{A}} % estimated genetic relatedness matrix
+\newcommand{\bb}{\mathbf{b}} % tested effect size vector
+\newcommand{\bB}{\mathbf{B}} % misc
+\newcommand{\bc}{\mathbf{c}} % misc
+\newcommand{\bg}{\mathbf{g}} % genetic effect
+\newcommand{\bG}{\mathbf{G}} % true genetic relatedness matrix
+\newcommand{\bI}{\mathbf{I}} % identity matrix
+\newcommand{\bK}{\mathbf{K}} % covariate matrix
+\newcommand{\bq}{\mathbf{q}} % misc
+\newcommand{\bQ}{\mathbf{Q}} % misc
+\newcommand{\bV}{\mathbf{V}} % covariance matrix in statgen
+\newcommand{\bw}{\mathbf{w}} % centered genotype vector
+\newcommand{\bx}{\mathbf{x}} % many
+\newcommand{\bX}{\mathbf{X}} % normalized genotype matrix, design matrix
+\newcommand{\by}{\mathbf{y}} % outcome vector
+\newcommand{\bz}{\mathbf{z}} % misc,
+\newcommand{\bZ}{\mathbf{Z}} % misc
+
+
+\newcommand{\bbeta}{\pmb{\beta}} % effect size vector
+\newcommand{\bepsilon}{\pmb{\epsilon}} % residual vector
+\newcommand{\bmu}{\pmb{\mu}} % mean vector
+\newcommand{\bSigma}{\pmb{\Sigma}} % covariance matrix
+\newcommand{\bOmega}{\pmb{\Omega}} % covariance matrix in GLS
+

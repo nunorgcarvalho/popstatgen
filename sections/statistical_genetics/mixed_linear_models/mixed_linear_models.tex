@@ -14,8 +14,6 @@
 
 \maketitle
 
-$\B{hi}$ hi
-
 \section{Mixed linear model associations}
 
 These derivations are based on Supplementary Note 1 of [\href{https://www.nature.com/articles/ng.2876}{Yang et al., 2014}]. They describe the model behind GCTA's implementation of mixed linear model (MLM) associations for determining SNP effects in a dataset containing cryptic relatedness.
@@ -24,100 +22,100 @@ These derivations are based on Supplementary Note 1 of [\href{https://www.nature
 
 \subsubsection{Phenotype model}
 A phenotype is modeled as:
-$$ y = Kc + g + e $$
+$$ \by = \bK \bc + \bg + \bepsilon $$
 Where:
 \begin{itemize}
-    \item $y$: outcomes.
+    \item $\by$: outcomes.
     $N \times 1$ vector.
     \begin{itemize}
         \item $N$: number of samples.
     \end{itemize}
-    \item $K$: design matrix of covariates and intercept placeholder term.
+    \item $\bK$: design matrix of covariates and intercept placeholder term.
     $N \times (K+1)$ matrix.
     \begin{itemize}
         \item $K$: number of covariates.
     \end{itemize}
-    \item $c$: covariate coefficients, including intercept term.
+    \item $\bc$: covariate coefficients, including intercept term.
     $(K+1) \times 1$ vector.
-    \item $g$: genetic effects.
+    \item $\bg$: genetic effects.
     $N \times 1$ vector.
-    \item $e$: non-genetic effects (i.e. error or noise term).
+    \item $\bepsilon$: non-genetic effects (i.e. error or noise term).
     $N \times 1$ vector.
 \end{itemize}
 
-The $Kc$ term consists of fixed effects, while the $g$ and $e$ terms are random effects.
-The genetic effect, $g$, is drawn from a multivariate normal distribution with a covariance structure determined by the genetic relatedness matrix (GRM, $A$) scaled by the genetic variance component $\sigma_g^2$. That is:
-$$ g \sim \mathcal{N} (0, A \sigma_g^2)$$
-Where the $A$ is a $N \times N$ matrix with elements denoting the genetic relatedness between individuals $j$ and $k$ as:
-$$ A_{jk} = \frac{1}{M} \sum_{i=1}^{M}
+The $\bK \bc$ term consists of fixed effects, while the $\bg$ and $\bepsilon$ terms are random effects.
+The genetic effect, $\bg$, is drawn from a multivariate normal distribution with a covariance structure determined by the genetic relatedness matrix (GRM, $\bA$) scaled by the genetic variance component $varg$. That is:
+$$ \bg \sim \mathcal{N} (0, \bA \varg)$$
+Where the $\bA$ is a $N \times N$ matrix with elements denoting the genetic relatedness between individuals $j$ and $k$ as:
+$$ \bA_{jk} = \frac{1}{M} \sum_{i=1}^{M}
 \frac{(x_{ij} - 2 p_i)(x_{ik} - 2 p_i)}
 {2 p_i (1 - p_i)}
 $$
 Where $M$ is the number of markers, $x_{ij}$ is the genotype (0, 1, or 2) at SNP $i$ for individual $j$, and $p_i$ is the allele frequency of SNP $i$: $p_i = \frac{1}{2 N} \sum_{j=1}^{N} x_{ij}$.
-If the genotype matrix, $X$, has been standardized such that each column containing genotypes for a given variant, $x$, is $E[x] = 0$ and $Var[x] = 1$, then the formula for the GRM is simply:
-$$ A = \frac{ X^{\T} X }{M} $$
+If the genotype matrix, $\bX$, has been standardized such that each row containing genotypes for a given variant, $\bX_i$, is $\E[\bX_i] = 0$ and $\Var[\bX_i] = 1$, then the formula for the GRM is simply:
+$$ \bA = \frac{ \bX^{\T} \bX }{M} $$
 
-The non-genetic effect, $e$, is drawn from a multivariate normal distribution with no covariance structure and scaled by the environmental variance component, $\sigma_e^2$. That is:
-$$ e \sim \mathcal{N} (0, I \sigma_e^2) $$
+The non-genetic effect, $\bepsilon$, is drawn from a multivariate normal distribution with no covariance structure and scaled by the environmental variance component, $\vareps$. That is:
+$$ \bepsilon \sim \N (\B{0}, \bI \vareps) $$
 
-We can therefore assume that $g$ and $e$ are independent from each other.
+We can therefore assume that $\bg$ and $\bepsilon$ are independent from each other.
 We can then define the SNP heritability as the proportion of non-fixed-effects variance that is explained by the genotyped markers, which is equivalent to:
 
 \begin{align*}
-    h_g^2 &= \frac{Var[g]}{Var[g + e]} \\
-    &= \frac{Var[g]}{Var[g] + Var[e]} \\
-    &= \frac{\sigma_g^2}{\sigma_g^2 + \sigma_e^2}
+    h_g^2 &= \frac{\Var[\bg]}{\Var[\bg + \bepsilon]} \\
+    &= \frac{\Var[\bg]}{\Var[\bg] + \Var[\bepsilon]} \\
+    &= \frac{\varg}{\varg + \vareps}
 \end{align*}
 
-The SNP heritability and the variance components, $\sigma_g^2$ and $I \sigma_e^2$, can be estimated by maximum likelihood methods (not covered here).
+The SNP heritability and the variance components, $\varg$ and $\bI \vareps$, can be estimated by maximum likelihood methods (not covered here).
 We can combine the covariance structure of both random effects into a single covariance matrix:
-$$ V = A \sigma_g^2 + I \sigma_e^2 $$
+$$ \bV = \bA \varg + \bI \vareps $$
 
 \subsubsection{Testing for the effect of a SNP}
-The GCTA method of MLMi, where the i stands for inclusion, assumes that any SNP's effect on the phenotype is small enough to not make up a large amount of the variance of the phenotype explained by $A$.
+The GCTA method of MLMi, where the i stands for inclusion, assumes that any SNP's effect on the phenotype is small enough to not make up a large amount of the variance of the phenotype explained by $\bA$.
 Therefore, this allows the SNP of interest to be pulled out as a fixed term to estimate the effect of while also keeping it in the GRM we calculated earlier.
 In contrast, MLMe methods construct a GRM that excludes the SNP being tested at any given time, as well as other SNPs in correlation with it.
 GCTA implements this through the Leave-One-Chromosome-Out (LOCO) method, where a GRM is constructed out of all the genotyped SNPs except those belonging to the same chromosome as the SNP being tested.
 This results in 22 GRMs (assuming autosomes only).
 We modify our above model:
-$$ y = Kc + w_i b_i + g + e $$
-Where $w_i$ is a $N \times 1$ vector of mean-adjusted genotypes, $w_{ij} = x_{ij} - 2 p_i$, and $b_i$ is its fixed effect we are trying to estimate. We can combine our fixed effects as follows:
+$$ \by = \bK \bc + \bw_i b_i + \bg + \bepsilon $$
+Where $\bw_i$ is a $N \times 1$ vector of mean-adjusted genotypes, $w_{ij} = x_{ij} - 2 p_i$, and $b_i$ is its fixed effect we are trying to estimate. We can combine our fixed effects as follows:
 \begin{equation*}
-q = \begin{bmatrix} c \\ b_i \end{bmatrix}
+\bq = \begin{bmatrix} \bc \\ b_i \end{bmatrix}
 \quad\mathrm{and}\quad
-Q = \begin{bmatrix} K & w_i \end{bmatrix}
+\bQ = \begin{bmatrix} \bK & \bw_i \end{bmatrix}
 \end{equation*}
 Our phenotype is now modeled as:
-$$ y = Q q + (g + e) $$
-Where the first term are fixed effects and the second term (in parantheses) are random effects with covariance structure $V$. Thus, we can think of our of phenotype as being drawn from:
-$$ y \sim \mathcal{N} (Q q, V) $$
-Since we have a covariance structure for the non-fixed term, estimating $q$ is therefore a matter of performing \textbf{Generalized Least Squares (GLS)}, where $\beta = q$, $X = Q$, and $\Omega = V$. From GLS, we know:
+$$ \by = \bQ \bq + (\bg + \bepsilon) $$
+Where the first term are fixed effects and the second term (in parantheses) are random effects with covariance structure $\bV$. Thus, we can think of our of phenotype as being drawn from:
+$$ \by \sim \N (\bQ \bq, \bV) $$
+Since we have a covariance structure for the non-fixed term, estimating $\bq$ is therefore a matter of performing \textbf{Generalized Least Squares (GLS)}, where $\bbeta = \bq$, $\bX = \bQ$, and $\bOmega = \bV$. From GLS, we know:
 \begin{equation*}
-    \hat{q} = (Q^{\T} V^{-1} Q)^{-1} Q^{\T} V^{-1} y
+    \hat{\bq} = (\bQ^{\T} \bV^{-1} \bQ)^{-1} \bQ^{\T} \bV^{-1} \by
     \quad\mathrm{and}\quad
-    Var[\hat{q}] = (Q^{\T} V^{-1} Q)^{-1}
+    \Var[\hat{\bq}] = (\bQ^{\T} \bV^{-1} \bQ)^{-1}
 \end{equation*}
-We can pull the SNP fixed effect, $\hat{b}_i$ from the last element of $\hat{q}$ and its variance, $Var[\hat{b}_i]$, from the last diagonal element of $Var[\hat{q}]$.
+We can pull the SNP fixed effect, $\hat{b}_i$ from the last element of $\hat{\bq}$ and its variance, $\Var[\hat{b}_i]$, from the last diagonal element of $\Var[\hat{\bq}]$.
 
 The $\chi^2$ test statistic is appropriate here because $\hat{b}_i$ is normally distributed.
 A $\chi^2$ distribution with 1 degree of freedom is equivalent to:
 $$ \chi^2_{df=1} = Z^2$$
-Where $Z$ is a standard normal variable with $E[Z]=0$ and $Var[Z]=0$. $\hat{b}_i$ already has mean 0 but non-standard variance.
-We can divide $\hat{b}_i$ by $\sqrt{Var[\hat{b}_i]}$ to obtain a standard normal variable, and then square it to obtain the $\chi^2$:
-$$ \chi^2 = (\frac{\hat{b}_i}{\sqrt{Var[\hat{b}_i]}})^2 = \frac{\hat{b}_i^2}{Var[\hat{b}_i]} $$
+Where $Z$ is a standard normal variable with $\E[Z]=0$ and $\Var[Z]=0$. $\hat{b}_i$ already has mean 0 but non-standard variance.
+We can divide $\hat{b}_i$ by $\sqrt{\Var[\hat{b}_i]}$ to obtain a standard normal variable, and then square it to obtain the $\chi^2$:
+$$ \chi^2 = (\frac{\hat{b}_i}{\sqrt{\Var[\hat{b}_i]}})^2 = \frac{\hat{b}_i^2}{\Var[\hat{b}_i]} $$
 
 \subsubsection{Case where there are no covariates}
 In the case where there are no covariates and the phenotype $y$ has been centered by the intercept term:
 \begin{equation*}
-    y^* = y - 1 \hat{c}
+    \by^* = \by - \B{1} \hat{\bc}
     \quad\mathrm{where}\quad
-    \hat{c} = (1^{\T} V^{-1} 1)^{-1} 1^{\T} y
+    \hat{\bc} = (\B{1}^{\T} \bV^{-1} 1)^{-1} 1^{\T} \by
 \end{equation*}
 then the SNP effect estimate can be simplified to:
 \begin{equation*}
-    \hat{b}_i = \frac{w_i^{\T} V^{-1} y^*}{w_i^{\T} V^{-1} w_i}
+    \hat{b}_i = \frac{\bw_i^{\T} \bV^{-1} \by^*}{\bw_i^{\T} \bV^{-1} \bw_i}
     \quad\mathrm{and}\quad
-    Var[\hat{b}_i] = \frac{1}{w_i^{\T} V^{-1} w_i}
+    \Var[\hat{b}_i] = \frac{1}{\bw_i^{\T} \bV^{-1} \bw_i}
 \end{equation*}
 The GCTA authors recommend adjusting for the covariates jointly with the SNP, rather than pre-adjusting the phenotype.
 This is because if the SNP is correlated with the covariates, pre-adjusting the phenotype can reduce power.
