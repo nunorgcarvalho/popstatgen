@@ -34,7 +34,7 @@ Where:
     \begin{itemize}
         \item $M_c$: number of causal variants.
         \item Normalized according to
-        $\bX_{c,i} =  \frac{\bX'_{c,i} - 2 f_i}{\sqrt{2 f_i (1 - f_i)}}$.
+        $\bX_{c,i} = \frac{\bX'_{c,i} - 2 f_i}{\sqrt{2 f_i (1 - f_i)}}$.
         \begin{itemize}
             \item $\bX_c'$: allele dosages, taking on values of 0, 1, 2.
             \item $f_i$: true population allele frequency for variant $i$.
@@ -85,5 +85,52 @@ The $G_{ii}$ element is the variance of individual $i$'s normalized genotype vec
 
 Narrow-sense heritability is defined as the proportion of phenotypic variance, $\sigma_P^2$, explained by additive genetic effects:
 $$ h^2 = \frac{\varg}{\sigma_P^2} = \frac{\varg}{\varg + \vareps} $$
+
+\subsection{Estimating the GRM}
+
+In practice, we likely do not know the exact set of causal variants and instead must estimate the GRM using a set of genotyped SNPs:
+
+$$ \bA = \frac{\bX \bX^{\T}}{M} $$
+
+Where $\bA$ is the estimated GRM, $X$ is the normalized genotype matrix of our genotyped SNPs, and $M$ is the number of genotyped SNPs.
+Note that because we are also working with a sample, $X$ is normalized using sample allele frequencies, $\bp$:
+
+$$ \bX_i = \frac{\bX'_i - 2 p_i}{\sqrt{2 p_i (1 - p_i)}} $$
+
+However, this equation for $A$ ignores the sampling error associated with each SNP.
+Let's consider the covariance computation between two individuals for SNP $i$, which is then summed across $M$ SNPs to get the value for $A_{jk}$.
+When $j \neq k$:
+\begin{align*}
+    A_{ijk} &= x_{ij} x_{ik} \\
+    &= \frac{x'_{ij} - 2 p_i}{\sqrt{2 p_i (1 - p_i)}}
+    \frac{x'_{ik} - 2 p_i}{\sqrt{2 p_i (1 - p_i)}} \\
+    &= \frac{(x'_{ij} - 2 p_i)(x'_{ik} - 2 p_i)}{2 p_i (1 - p_i)}
+\end{align*}
+Because $x'_{ij}$ and $x'_{ik}$ are independent from each other and $p_i$ is a constant:
+\begin{align*}
+    \Var[A_{ijk}] &= \Var[\frac{(x'_{ij} - 2 p_i)(x'_{ik} - 2 p_i)}{2 p_i (1 - p_i)}] \\
+    &= \frac{\Var[(x'_{ij} - 2 p_i)]\Var[(x'_{ik} - 2 p_i)]}{(2 p_i (1 - p_i))^2} \\
+    &= \frac{\Var[(x'_{ij})]\Var[(x'_{ik})]}{(2 p_i (1 - p_i))^2} \\
+    &= \frac{(2 p_i (2 - p_i))(2 p_i (2 - p_i))}{(2 p_i (1 - p_i))^2} \\
+    &= 1
+\end{align*}
+So, the variance in $A_{jk}$ is independent of allele frequency. But this is not the case when $j = k$:
+\begin{align*}
+    A_{ijj} &= x_{ij}^2 \\
+    &= (\frac{x'_{ij} - 2 p_i}{\sqrt{2 p_i (1 - p_i)}})^2 \\
+    &= \frac{(x'_{ij} - 2 p_i)^2}{2 p_i (1 - p_i)}
+\end{align*}
+For simplicity, let's denote $Z = 2 p_i (1 - p_i)$ and make use of $\Var[Y] = \E[Y^2] - \E[Y]^2$:
+\begin{align*}
+    \Var[A_{ijj}] &= \Var[\frac{(x'_{ij} - 2 p_i)^2}{Z}] \\
+    &= \frac{\Var[(x'_{ij} - 2 p_i)^2]}{(Z)^2} \\
+    &= \frac{\E[((x'_{ij} - 2 p_i)^2)^2] - \E[(x'_{ij} - 2 p_i)^2)]^2}{(Z)^2} \\
+    &= \frac{(Z) - (Z)^2}{(Z)^2} \\
+    &= \frac{(Z)(1  - Z)}{(Z)^2} \\
+    &= \frac{1  - Z}{Z} \\
+    &= \frac{1  - 2 p_i (1 - p_i)}{2 p_i (1 - p_i)} \\
+\end{align*}
+The full derivation for why $\E[((x'_{ij} - 2 p_i)^2)^2] = \E[(x'_{ij} - 2 p_i)^2] = 2 p_i (1 - p_i)$ is very lengthy algebraically, but can be shortcutted by using the formula for the \href{https://en.wikipedia.org/wiki/Binomial_distribution#Higher_moments}{higher moments of a binomially distributed variable}, where $n=2$ and $p=p_i$.
+Importantly, the variance of $A_{jj}$ therefore depends on the allele frequencies of the SNPs, even after normalization.
 
 \end{document}
