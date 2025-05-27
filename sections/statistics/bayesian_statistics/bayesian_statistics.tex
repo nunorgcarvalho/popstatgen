@@ -1,0 +1,121 @@
+\documentclass[12pt]{article}
+
+% loads config.sty
+\makeatletter
+\def\input@path{{../../../}}
+\makeatother
+\usepackage{config}
+\usepackage{macros}
+
+\title{Bayesian Statistics}
+\date{\today}
+
+% document-specific macros
+\newcommand{\varbb}{\sigma_{\beta | \hat{\beta}}^2} % genetic variance
+
+\begin{document}
+
+\maketitle
+
+\section{Distribution of a parameter from a noisy estimate}
+Often times, there is some true parameter, $\beta$, we are interested in, but our estimate carries with it some noise, $\epsilon$.
+If we know (or assume) the prior distributions of the parameter and noise, we can use Bayes' Theorem to derive the expected true parameter value given our estimate.
+This may be useful if we are producing estimates for a set of parameters that share the same prior distribution, and we want to regularize our estimates down towards zero to avoid overfitting in order to maximize prediction.
+
+Here, we will assume the true parameter value is normally distributed around zero.
+
+\subsection{Set-up}
+Formally, we can write:
+$$\hat{\beta} = \beta + \epsilon$$
+\begin{equation*}
+    \quad\mathrm{where}\quad
+    \beta \sim \N(0, \varbeta)
+    \quad\mathrm{and}\quad
+    \epsilon \sim \N(0, \vareps)
+\end{equation*}
+meaning that the true parameter value and its measurement noise are independent from each other.
+Our goal is to obtain the distribution of $\beta | \hat{\beta}$.
+Using Bayes' Theorem, we know:
+$$\Pr(\beta | \hat{\beta}) = \frac{\Pr(\hat{\beta} | \beta) \Pr(\beta)}{\Pr(\hat{\beta})}$$
+The denominator, $\Pr(\hat{\beta})$, is just a scalar that ensures that the integral of the entire expression is 1.
+In other words, it does not actually affect the shape of the distribution, so we can primarily concern ourselves with:
+$$ \Pr(\beta | \hat{\beta}) \propto \Pr(\hat{\beta} | \beta) \Pr(\beta) $$
+
+We will also be making use of the probability density function for a normally distributed variable with mean $\mu$ and standard deviation $\sigma$:
+$$\Pr(X=x) = \frac{1}{\sqrt{2 \pi \sigma^2}} \exp(\frac{-(x - \mu)^2}{2 \sigma^2})$$
+
+\subsection{Derivation}
+\subsubsection{\texorpdfstring{$\Pr(\beta)$}{Pr(beta)}}
+We have already defined the distribution of $\beta$ to be:
+$$ \Pr(\beta) = (2 \pi \varbeta)^{-\frac{1}{2}} \exp(- \frac{\beta^2}{2 \varbeta}) $$
+
+\subsubsection{\texorpdfstring{$\Pr(\hat{\beta} | \beta)$}{Pr(beta-hat | beta)}}
+As defined, $\hat{\beta}$ is a random variable that is the sum of two independent normally distributed random variables, $\beta$ and $\epsilon$.
+By fixing $\beta$, $\hat{\beta}$ just becomes the distribution of $\epsilon$ plus the constant $\beta$.
+Adding a constant to a normally distributed variable only changes the mean of that distribution, so:
+$$ \hat{\beta} | \beta \sim \N(\beta + \E[\epsilon], \vareps) = \N(\beta, \vareps)$$
+Therefore:
+$$\Pr(\hat{\beta} | \beta) = (2 \pi \vareps)^{-\frac{1}{2}} \exp(- \frac{(\hat{\beta} - \beta)^2}{2 \vareps}) $$
+
+\subsubsection{\texorpdfstring{$\Pr(\hat{\beta} | \beta) \cdot \Pr(\beta)$}{Pr(beta-hat | beta) Pr(beta)}}
+
+We now multiply both of these probabilities together:
+\begin{align*}
+\Pr(\hat{\beta} | \beta) \Pr(\beta) &= (2 \pi \vareps)^{-\frac{1}{2}} \exp(- \frac{(\hat{\beta} - \beta)^2}{2 \vareps}) (2 \pi \varbeta)^{-\frac{1}{2}} \exp(- \frac{\beta^2}{2 \varbeta}) \\
+&= ((2 \pi \vareps)(2 \pi \varbeta))^{-\frac{1}{2}} \exp(
+    -\frac{1}{2} (\frac{(\hat{\beta} - \beta)^2}{\vareps} + \frac{\beta^2}{\varbeta})
+)
+\end{align*}
+
+For simplicity, we'll define $C_1 = ((2 \pi \vareps)(2 \pi \varbeta))^{-\frac{1}{2}}$, which is just a scaling factor and does not affect the shape of the distribution.
+The goal is to rewrite the term inside the exponent, which determines the shape, in a form analogous to a normal distribution.
+Keep in mind that the sole variable here is $\beta$, as we have fixed $\hat{\beta}$ since we are trying to determine $\beta | \hat{\beta}$.
+We'll start by expanding the square:
+
+\begin{align*}
+-\frac{1}{2} (\frac{(\hat{\beta} - \beta)^2}{\vareps} + \frac{\beta^2}{\varbeta}) &= 
+-\frac{1}{2} (\frac{\hat{\beta}^2 - 2 \hat{\beta} \beta + \beta^2}{\vareps} + \frac{\beta^2}{\varbeta}) \\
+&= -\frac{1}{2} ((\frac{1}{\vareps}+\frac{1}{\varbeta})\beta^2 - \frac{2}{\vareps} \hat{\beta} \beta + \frac{1}{\vareps} \hat{\beta}) \\
+&= -\frac{1}{2} ((\frac{1}{\vareps}+\frac{1}{\varbeta})\beta^2 - \frac{2}{\vareps} \hat{\beta} \beta) - \frac{\hat{\beta}}{2 \vareps}
+\end{align*}
+
+We now define:
+$$\varbb = \frac{\vareps \varbeta}{\vareps + \varbeta}$$
+such that:
+$$
+\frac{1}{\vareps}+\frac{1}{\varbeta} = \frac{\vareps + \varbeta}{\vareps \varbeta} = \frac{1}{\varbb} $$
+We can also pull out the last term as a constant, $C_2 = - \frac{\hat{\beta}}{2 \vareps}$, since it doesn't contain $\beta$ and $\exp(C_2)$ is still a constant.
+We will also pull out $\varbb$ and complete the square:
+
+\begin{align*}
+    -\frac{1}{2} (\frac{(\hat{\beta} - \beta)^2}{\vareps} + \frac{\beta^2}{\varbeta})
+    &= -\frac{1}{2} (\frac{1}{\varbb} \beta^2 - \frac{2}{\vareps} \hat{\beta} \beta) + C_2 \\
+    &= -\frac{1}{2 \varbb} (\beta^2 - \frac{2 \varbb}{\vareps} \hat{\beta} \beta) + C_2 \\
+    &= -\frac{1}{2 \varbb} (\beta^2 - 2 \frac{\varbb}{\vareps} \hat{\beta} \beta + (\frac{\varbb}{\vareps} \hat{\beta})^2 - (\frac{\varbb}{\vareps} \hat{\beta})^2) + C_2 \\
+    &= -\frac{1}{2 \varbb} ((\beta - \frac{\varbb}{\vareps} \hat{\beta})^2 - (\frac{\varbb}{\vareps} \hat{\beta})^2) + C_2 \\
+    &= -\frac{1}{2 \varbb} (\beta - \frac{\varbb}{\vareps} \hat{\beta})^2 + \frac{\varbb}{2 (\vareps)^2} \hat{\beta}^2 + C_2
+\end{align*}
+Similar to before, we'll define $C_3 = \frac{\varbb}{2 (\vareps)^2} \hat{\beta}^2$, which is another constant. This means we can now write:
+$$ \Pr(\hat{\beta} | \beta) \Pr(\beta) = 
+C_1 \exp(C_2 + C_3) \exp(
+    -\frac{(\beta - \frac{\varbb}{\vareps} \hat{\beta})^2}{2 \varbb} ) $$
+This is equivalent to the probability density function of a normal distribution with a mean of $\frac{\varbb}{\vareps} \hat{\beta}$ and variance of $\varbb$.
+We can now plug in the definition of $\varbb = \frac{\vareps \varbeta}{\vareps + \varbeta}$ to get:
+$$
+\beta | \hat{\beta} \sim \N(\frac{\varbeta}{\varbeta + \vareps}\hat{\beta}, \frac{\vareps \varbeta}{\vareps + \varbeta})
+$$
+Therefore:
+$$ \E[\beta | \hat{\beta}] = \frac{\varbeta}{\varbeta + \vareps}\hat{\beta} $$
+
+\subsection{Intuition}
+We can understand this formula as follows:
+The true parameter value, $\beta$, is distributed around zero.
+Our parameter estimate, $\hat{\beta}$, can take on a value far from zero not only because the true parameter value is far from zero, but also if it has large measurement error, $\epsilon$ that pushes it farther from zero.
+Therefore, while given a certain true parameter value, the expected parameter estimate is the same as the true parameter value (that is, $\E[\hat{\beta} | \beta] = \beta$, since the measurement error is centered at zero), the reverse is not true.
+
+Instead, the expected value of the true parameter, given the parameter estimate, is equal to the parameter estimate multiplied by a shrinkage factor, $\frac{\varbeta}{\varbeta + \vareps}$.
+The greater signal ($\varbeta$) there is relative to noise ($\vareps$), the less the expected true parameter value is shrunk towards zero.
+In other words, the less noise there is, the closer the expected true parameter value is to the parameter estimate.
+If there is no noise, the parameter estimate is always the true parameter value.
+
+\end{document}
