@@ -117,5 +117,11 @@ Instead, the expected value of the true parameter, given the parameter estimate,
 The greater signal ($\varbeta$) there is relative to noise ($\vareps$), the less the expected true parameter value is shrunk towards zero.
 In other words, the less noise there is, the closer the expected true parameter value is to the parameter estimate.
 If there is no noise, the parameter estimate is always the true parameter value.
+If the prior distribution of $beta$ is very flat, e.g. the $varbeta$ is very large, then the expected true parameter value also approaches the parameter estimate.
+
+\subsection{Reliability}
+
+This shrinkage coefficient is very closely related to the concept of \href{https://en.wikipedia.org/wiki/Reliability_(statistics)#Classical_test_theory}{reliability in Classical test theory}.
+It is equivalent to the realibility coefficient.
 
 \end{document}
