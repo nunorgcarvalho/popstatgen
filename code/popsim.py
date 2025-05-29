@@ -15,6 +15,7 @@ class Population:
     p: np.ndarray # current allele frequencies
 
     ps: np.ndarray # array of allele frequencies over generations
+    T_breaks: list # specifies generations which were simulated in sequence
 
     # initializes instance
     def __init__(self, N: int, M: int,
@@ -25,6 +26,7 @@ class Population:
         self.N = N
         self.M = M
         self.P = P
+        self.T_breaks = [0]
         # sets seed if specified
         if seed is not None:
             seed = np.random.seed(seed)
@@ -74,16 +76,21 @@ class Population:
         p = G.mean(axis=0) / self.P
         return p
     
-    def next_generation(self):
+    def next_generation(self, mu: float = 0):
         """
         Simulates new generation.
         Doesn't simulate offspring directly.
         """
-        self.H = self._generate_unrelated_haplotypes(self.p)
+        # analytical allele frequency from which next generations' alleles are drawn from
+        p = self.p
+        # effect of mutation
+        p = p*(1-mu) + (1-p)*mu
+        # effect of genetic drift
+        self.H = self._generate_unrelated_haplotypes(p)
         self.G = self._get_G(self.H)
         self.p = self.get_freq(self.G)
 
-    def simulate_generations(self, generations: int, update_record: bool = True):
+    def simulate_generations(self, generations: int, update_record: bool = True, mu: float = 0):
         """
         Simulates specified number of generations beyond current
         """
@@ -96,16 +103,17 @@ class Population:
         
         # loops through each generation
         for t in range(generations):
-            self.next_generation()
+            self.next_generation(mu=mu)
             # records allele frequency
             if update_record:
                 ps[previous_gens + t,] = self.p
-        
+        self.T_breaks.append(previous_gens + generations)
         # saves allele freqs. at each generation (keeps old generations)
         if update_record:
             self.ps = ps
 
-    def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: list = None, legend=False):
+    def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: list = None,
+                            legend=False, last_generations: int = None):
         """
         Returns plot of variant allele frequencies over time
         """
@@ -115,16 +123,28 @@ class Population:
         # uses population's allele frequency history if not specified
         if ps is None:
             ps = self.ps
+        # plots all generations if not specified
+        if last_generations is None:
+            t_start = 0
+        else:
+            t_start = max(0,ps.shape[0] - last_generations)
+        t_keep = list( range(t_start, ps.shape[0]))
         # subsets to specified variants
-        ps = ps[:,j_keep]
-        # plots
-        T = np.arange(ps.shape[0])
+        ts = np.arange(t_start, ps.shape[0])
+        ps = ps[np.ix_(t_keep, j_keep)]
+        # plotting
         plt.figure(figsize=(8, 5))
+        # allele frequency lines
         for j in range(ps.shape[1]):
-            plt.plot(T, ps[:, j], label=f'Variant {j_keep[j]}')
+            plt.plot(ts, ps[:, j], label=f'Variant {j_keep[j]}')
+        # vertical lines denoting simulation batches
+        for t in self.T_breaks:
+            plt.axvline(t, ls='--', color='black')
+        # labels
         plt.xlabel('Generation')
         plt.ylabel('Allele Frequency')
         plt.title('Allele Frequency Trajectories Over Time')
+        plt.xlim(ts.min(), ts.max())
         plt.ylim(0, 1)
         if legend:
             plt.legend()
