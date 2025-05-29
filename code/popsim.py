@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+from typing import Tuple, Union
 
 class Population:
     """
@@ -76,21 +77,28 @@ class Population:
         p = G.mean(axis=0) / self.P
         return p
     
-    def next_generation(self, mu: float = 0):
+    def next_generation(self, mu: float = 0,
+                        s: Union[float, np.ndarray] = 0):
         """
         Simulates new generation.
         Doesn't simulate offspring directly.
         """
+        # assigns same selection coefficient to all variants if only single value specified
+        if type(s) == float:
+            s = np.full(self.M, s)
         # analytical allele frequency from which next generations' alleles are drawn from
         p = self.p
-        # effect of mutation
+        # effect of selection
+        p = p * (1 + s) / (1 + p*s)
+        # effect of mutation (in gametes that lead to new generation, i.e. post-selection)
         p = p*(1-mu) + (1-p)*mu
         # effect of genetic drift
         self.H = self._generate_unrelated_haplotypes(p)
         self.G = self._get_G(self.H)
         self.p = self.get_freq(self.G)
 
-    def simulate_generations(self, generations: int, update_record: bool = True, mu: float = 0):
+    def simulate_generations(self, generations: int, update_record: bool = True,
+                             mu: float = 0, s: Union[float, np.ndarray] = 0):
         """
         Simulates specified number of generations beyond current
         """
@@ -103,7 +111,7 @@ class Population:
         
         # loops through each generation
         for t in range(generations):
-            self.next_generation(mu=mu)
+            self.next_generation(mu=mu, s=s)
             # records allele frequency
             if update_record:
                 ps[previous_gens + t,] = self.p
@@ -112,14 +120,15 @@ class Population:
         if update_record:
             self.ps = ps
 
-    def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: list = None,
-                            legend=False, last_generations: int = None):
+    def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: tuple = None,
+                            legend=False, last_generations: int = None,
+                            summarize: bool = False, quantiles: tuple = (0.25, 0.5, 0.75)):
         """
         Returns plot of variant allele frequencies over time
         """
         # plots all variants if not specified
         if j_keep is None:
-            j_keep = list( range(self.M) )
+            j_keep = tuple( range(self.M) )
         # uses population's allele frequency history if not specified
         if ps is None:
             ps = self.ps
@@ -128,15 +137,26 @@ class Population:
             t_start = 0
         else:
             t_start = max(0,ps.shape[0] - last_generations)
-        t_keep = list( range(t_start, ps.shape[0]))
+        t_keep = tuple( range(t_start, ps.shape[0]))
         # subsets to specified variants
         ts = np.arange(t_start, ps.shape[0])
         ps = ps[np.ix_(t_keep, j_keep)]
+        
+        # if True, gets mean and quartiles for variants over time, which are plotted instead
+        if summarize:
+            ps_mean, ps_quantile = self.summarize_ps(ps, quantiles)
+        
         # plotting
         plt.figure(figsize=(8, 5))
         # allele frequency lines
-        for j in range(ps.shape[1]):
-            plt.plot(ts, ps[:, j], label=f'Variant {j_keep[j]}')
+        if not summarize:
+            for j in range(ps.shape[1]):
+                plt.plot(ts, ps[:, j], label=f'Variant {j_keep[j]}')
+        else:
+            plt.plot(ts, ps_mean, color='deepskyblue', label = 'Mean', ls='--')
+            for j in range(len(quantiles)):
+                plt.plot(ts, ps_quantile[j,:], label=f'{quantiles[j]*100}% percentile', color = 'lightskyblue', ls=':')
+
         # vertical lines denoting simulation batches
         for t in self.T_breaks:
             plt.axvline(t, ls='--', color='black')
@@ -164,4 +184,17 @@ class Population:
         # finds first instance of True for each variant
         t_fix = np.where(ps_mask.any(axis=0), ps_mask.argmax(axis=0), -1)        
         return t_fix
-        
+    
+    def summarize_ps(self, ps: np.ndarray = None, quantiles: tuple = (0.25, 0.5, 0.75)) -> tuple[np.ndarray, np.ndarray]:
+        '''
+        Returns the mean as well as the specified quantiles (default: quartiles) of  variants across each generation
+        '''
+        # uses population's allele frequency history if not specified
+        if ps is None:
+            ps = self.ps
+        # computes mean allele frequency over time
+        ps_mean = self.ps.mean(axis=1)
+        # computes quantiles over time
+        ps_quantile = np.quantile(self.ps, quantiles, axis=1)
+        return (ps_mean, ps_quantile)
+
