@@ -30,6 +30,9 @@ class Population:
             seed = np.random.seed(seed)
         if p_init is None:
             p_init = self._draw_p_init(method = 'uniform', params = (0.05, 0.95))
+        elif type(p_init) == float or type(p_init) == int:
+            # if only single value is given, all variants have same initial frequency
+            p_init = np.full(self.M, p_init)
 
         # generates initial genotypes and records allele frequencies
         self.H = self._generate_unrelated_haplotypes(p_init)
@@ -102,7 +105,7 @@ class Population:
         if update_record:
             self.ps = ps
 
-    def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: list = None):
+    def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: list = None, legend=False):
         """
         Returns plot of variant allele frequencies over time
         """
@@ -123,8 +126,22 @@ class Population:
         plt.ylabel('Allele Frequency')
         plt.title('Allele Frequency Trajectories Over Time')
         plt.ylim(0, 1)
-        if ps.shape[1] <= 10:
+        if legend:
             plt.legend()
         plt.tight_layout()
         plt.show()
+
+    def get_fixation_t(self, ps: np.ndarray = None) -> np.ndarray:
+        """
+        For each variant, finds *first* generation (returned as an index) for which the allele frequency is 0 or 1 (fixation).
+        A value of -1 means the variant never got fixed
+        """
+        # uses population's allele frequency history if not specified
+        if ps is None:
+            ps = self.ps
+        # gets mask of whether frequency is 0 or 1
+        ps_mask = np.any((ps == 0, ps == 1), axis=0)
+        # finds first instance of True for each variant
+        t_fix = np.where(ps_mask.any(axis=0), ps_mask.argmax(axis=0), -1)        
+        return t_fix
         
