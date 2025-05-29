@@ -1,5 +1,7 @@
 sections/.vscode/
 .vscode
+code/testing.ipynb
+code/__pycache__
 
 ## Core latex/pdflatex auxiliary files:
 *.aux
