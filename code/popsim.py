@@ -19,10 +19,19 @@ class Population:
     T_breaks: list # specifies generations which were simulated in sequence
 
     # initializes instance
-    def __init__(self, N: int, M: int,
-                 p_init: np.ndarray = None,
-                 P: int = 2,
+    def __init__(self, N: int, M: int, P: int = 2,
+                 p_init: Union[float, np.ndarray] = None,
                  seed: int = None):
+        '''
+        Initializes a population, simulating initial genotypes.
+
+        Parameters:
+            N (int): {opulation size of individuals (not haplotypes).
+            M (int): Total number of variants in genome.
+            P (int): ploidy of genotpes. Default is 2 (diploid).
+            p_init (float or array): Initial allele frequency of variants. If only a single value is provided, it is treated as the initial allele frequency for all variants. Otherwise, must be an array of length M. Default is uniform distribution between 0.05 and 0.95.
+            seed (int): Initial seed to use when simulating genotypes (and allele frequencies if necessary).
+        '''
         # defines properties of instance
         self.N = N
         self.M = M
@@ -31,6 +40,7 @@ class Population:
         # sets seed if specified
         if seed is not None:
             seed = np.random.seed(seed)
+        # draws initial allele frequencies from uniform distributio between 0.05 and 0.95 if not specified
         if p_init is None:
             p_init = self._draw_p_init(method = 'uniform', params = (0.05, 0.95))
         elif type(p_init) == float or type(p_init) == int:
@@ -45,7 +55,14 @@ class Population:
 
     def _draw_p_init(self, method: str, params: list) -> np.ndarray:
         """
-        Returns array of initial allele frequencies to simulate genotypes from
+        Returns array of initial allele frequencies to simulate genotypes from.
+
+        Parameters:
+            method (str): Method of randomly drawing allele frequencies. Options:
+                uniform: 'Draws from uniform distribution with lower and upper bounds specified by `params`.'
+            params (list): Method-specific parameter values.
+        Returns:
+            p_init (1D array): Array of length M containing allele frequencies.
         """
         # uniform sampling is default
         if method == 'uniform':
@@ -54,38 +71,57 @@ class Population:
         else:
             return np.full(self.M, np.nan)
     
-    def _generate_unrelated_haplotypes(self, p_init: np.ndarray) -> np.ndarray:
+    def _generate_unrelated_haplotypes(self, p: np.ndarray) -> np.ndarray:
         """
-        Generates haplotype 3-dimensional matrix
+        Generates 3-dimensional matrix of population haplotypes.
+
+        Parameters:
+            p (1D array): Array of allele frequencies to draw alleles from.
+        Returns:
+            H (3D array): N*M*P array of alleles. First dimension is individuals, second dimension is variants, third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
         """
-        p_broadcast = p_init.reshape(1, self.M, 1)
-        H = np.random.binomial( 1, p = p_broadcast, size = (self.N, self.M, self.P))
+        p = p.reshape(1, self.M, 1)
+        H = np.random.binomial( 1, p = p, size = (self.N, self.M, self.P))
         return H
     
     @staticmethod
     def _get_G(H) -> np.ndarray:
         """
         Collapses haplotypes into genotypes
+
+        Parameters:
+            H (3D array): N*M*P array of alleles
+        Returns:
+            G (2D array): N*M array of genotypes. First dimension is individuals, second dimension is variants. Each element is an integer ranging from 0 to P (the ploidy).
         """
         G = H.sum(axis=2)
         return G
     
     def get_freq(self, G) -> np.ndarray:
         """
-        Return array of allele frequencies for current genotypes
+        Return array of allele frequencies for current genotypes.
+
+        Parameters:
+            G (2D array): N*M array of genotypes. First dimension is individuals, second dimension is variants. Each element is an integer ranging from 0 to P (the ploidy).
+        Returns:
+            p (1D array): Array of allele frequencies.
         """
         p = G.mean(axis=0) / self.P
         return p
     
-    def next_generation(self, mu: float = 0,
-                        s: Union[float, np.ndarray] = 0):
+    def next_generation(self, s: Union[float, np.ndarray] = 0, mu: float = 0):
         """
-        Simulates new generation.
-        Doesn't simulate offspring directly.
+        Simulates new generation. Doesn't simulate offspring directly, meaning that future offspring have haplotypes drawn randomly from allele frequencies. Automatically updates object.
+
+        Parameters:
+            s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
+            mu (float): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
         """
-        # assigns same selection coefficient to all variants if only single value specified
+        # assigns same selection coefficient/mutation rate to all variants if only single value specified
         if type(s) == float:
             s = np.full(self.M, s)
+        if type(mu) == float:
+            mu = np.full(self.M, mu)
         # analytical allele frequency from which next generations' alleles are drawn from
         p = self.p
         # effect of selection
@@ -97,13 +133,19 @@ class Population:
         self.G = self._get_G(self.H)
         self.p = self.get_freq(self.G)
 
-    def simulate_generations(self, generations: int, update_record: bool = True,
+    def simulate_generations(self, generations: int, record_history: bool = True,
                              mu: float = 0, s: Union[float, np.ndarray] = 0):
         """
-        Simulates specified number of generations beyond current
+        Simulates specified number of generations beyond current generation. Doesn't simulate offspring directly, meaning that future offspring have haplotypes drawn randomly from allele frequencies. Automatically updates object.
+
+        Parameters:
+            generations (int): Number of generations to simulate (beyond the current generation).
+            record_history (bool): Determines if allele frequencies at each generation are saved to a matrix belonging to the object. Default is True.
+            s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
+            mu (float): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
         """
         # keeps track of allele frequencies over generations if specified
-        if update_record:
+        if record_history:
             # checks if previous generations have already been generated or not
             previous_gens = self.ps.shape[0]
             ps = np.full( (previous_gens + generations, self.M), np.nan)
@@ -113,18 +155,26 @@ class Population:
         for t in range(generations):
             self.next_generation(mu=mu, s=s)
             # records allele frequency
-            if update_record:
+            if record_history:
                 ps[previous_gens + t,] = self.p
         self.T_breaks.append(previous_gens + generations)
         # saves allele freqs. at each generation (keeps old generations)
-        if update_record:
+        if record_history:
             self.ps = ps
 
     def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: tuple = None,
                             legend=False, last_generations: int = None,
                             summarize: bool = False, quantiles: tuple = (0.25, 0.5, 0.75)):
         """
-        Returns plot of variant allele frequencies over time
+        Plots variant allele frequencies over time.
+
+        Parameters:
+            ps (2D array): T*M matrix (where T is number of generations) containing allele frequencies over time. Defaults to object's allele frequency history.
+            j_keep (tuple): Variant indices to include when plotting. Defaults to all variants.
+            legend (bool): Whether to include a legend in the plot for each line. Default is False.
+            last_generations (int): Number specifying the number of most recent generations to plot. Defaults to all generations since beginning.
+            summarize (bool): If true, instead of plotting individual variant trajectories, it plots the mean and specified quantiles of allele frequencies across variants at each generation. Default is False.
+            quantiles (tuple): List of quantiles (e.g. 0.99) of allele frequencies across variants at each generation to plot. `summarize` must be set to True. Default is median, lower quartile, and upper quartile.
         """
         # plots all variants if not specified
         if j_keep is None:
@@ -173,8 +223,13 @@ class Population:
 
     def get_fixation_t(self, ps: np.ndarray = None) -> np.ndarray:
         """
-        For each variant, finds *first* generation (returned as an index) for which the allele frequency is 0 or 1 (fixation).
-        A value of -1 means the variant never got fixed
+        For each variant, finds *first* generation (returned as an index) for which the allele frequency is 0 (loss) or 1 (fixation). A value of -1 means the variant never got fixed
+
+        Parameters:
+            ps (2D array): T*M matrix (where T is number of generations) containing allele frequencies over time. Defaults to object's allele frequency history.
+        
+        Returns:
+            t_fix (1D array): Array of length M with the first generation (as an index) for which the respective allele was lost or fixed. If the allele was not fixed by the most recent simulation, a -1 is returned.
         """
         # uses population's allele frequency history if not specified
         if ps is None:
@@ -187,7 +242,15 @@ class Population:
     
     def summarize_ps(self, ps: np.ndarray = None, quantiles: tuple = (0.25, 0.5, 0.75)) -> tuple[np.ndarray, np.ndarray]:
         '''
-        Returns the mean as well as the specified quantiles (default: quartiles) of  variants across each generation
+        Returns the mean as well as the specified quantiles of variants across each generation.
+
+        Parameters:
+            ps (2D array): T*M matrix (where T is number of generations) containing allele frequencies over time. Defaults to object's allele frequency history.
+            quantiles (tuple): List of quantiles (e.g. 0.99) of allele frequencies across variants at each generation to plot. `summarize` must be set to True. Default is median, lower quartile, and upper quartile.
+        
+        Returns:
+            ps_mean (1D array): Array of length T (where T is the total number of generations) of mean allele frequency at each generation.
+            ps_quantile (2D array): K*T matrix (where K is the number of quantiles specified) of allele frequency for each quantile at each generation.
         '''
         # uses population's allele frequency history if not specified
         if ps is None:
