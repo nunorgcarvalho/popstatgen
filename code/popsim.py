@@ -69,19 +69,23 @@ class Population:
     #### Setting object attributes ####
     ###################################
 
-    def _update_obj(self, H: np.ndarray = None, K: np.ndarray = None):
+    def _update_obj(self, H: np.ndarray = None, K: np.ndarray = None,
+                    GRM: bool = False):
         '''
         Update the population object's attributes.
 
         Parameters:
             H (3D array): Haplotype array.
             K (2D array): Kinship array.
+            GRM (bool): Whether the GRM should computed from the genotype matrix. Default is false.
         '''
 
         if H is not None:
             self.H = H
             self.G = self._get_G(self.H)
             self.p = self.get_freq(self.G)
+            if GRM:
+                self.GRM = self.get_GRM(self.G, self.p, self.P)
         if K is not None:
             self.K = K
 
@@ -109,6 +113,33 @@ class Population:
         '''
         p = G.mean(axis=0) / self.P
         return p
+    
+    def get_GRM(self, G: np.ndarray = None, p: np.ndarray = None, P: int = None) -> np.ndarray:
+        '''
+        Computes the genetic relationship matrix (GRM).
+
+        Parameters:
+            G (2D array): Genotype matrix. If not specified, assumes to be from object it was called from.
+            p (1D array): Array of allele frequencies from which to center genotypes. If not specified, assumes to be from object it was called from.
+            P (int): Ploidy of genotype matrix. If not specified, assumes to be same as object it was called from.
+        Returns:
+            GRM (2D array): An N*N genetic relationship matrix. Each element is the mean covariance of standardized genotypes across all variants.
+        '''
+        if G is None:
+            G = self.G
+            p = self.p
+            P = self.P
+        else:
+            if p is None:
+                p = self.get_freq(G)
+            if P is None:
+                P = self.P
+        # get standardized genotype matrix (forced to have Var=1 per column)
+        X = self.standardize_G(G,p,P, std_method='observed')
+        M = X.shape[1]
+        # computes GRM
+        GRM = (X @ X.T) / M
+        return GRM
     
     #######################################
     #### Analysis of object attributes ####
@@ -155,6 +186,69 @@ class Population:
         # computes quantiles over time
         ps_quantile = np.quantile(self.ps, quantiles, axis=1)
         return (ps_mean, ps_quantile)
+    
+    # centers a genotype matrix
+    def center_G(self,G: np.ndarray = None, p: np.ndarray = None, P: int = None) -> np.ndarray:
+        '''
+        Centers genotype matrix so that the mean of each column is 0 (or approximately)
+        Parameters:
+            G (2D array): Genotype matrix. If not specified, assumes to be from object it was called from.
+            p (1D array): Array of allele frequencies from which to center genotypes. If not specified, assumes to be from object it was called from.
+            P (int): Ploidy of genotype matrix. If not specified, assumes to be same as object it was called from.
+        Returns:
+            G_centered (2D array): Centered genotype matrix
+        '''
+        if G is None:
+            G = self.G
+            p = self.p
+            P = self.P
+        else:
+            if p is None:
+                p = self.get_freq(G)
+            if P is None:
+                P = self.P
+        G = G - P*p[None,:]
+        return G # now centered, so actually X - mu
+
+    def standardize_G(self, G: np.ndarray, p: np.ndarray = None, P: int = None,
+                      impute: bool = True, std_method: str = 'observed'):
+        '''
+        Standardizes genotype matrix so that each column has mean 0 and standard deviation of 1 (or approximately).
+
+        Parameters:
+            G (2D array): Genotype matrix. If not specified, assumes to be from object it was called from.
+            p (1D array): Array of allele frequencies from which to center genotypes. If not specified, assumes to be from object it was called from.
+            P (int): Ploidy of genotype matrix. If not specified, assumes to be same as object it was called from.
+            impute (bool): If genotype matrix is a masked array, missing values are filled with the mean genotype value. Default is True.
+            std_method (str): Method for calculating genotype standard deviations. If 'observed' (default), then the actual mathematical standard deviation is used. If 'binomial', then the expected standard deviation based on binomial sampling of the allele frequency is used.
+        Returns:
+            X (2D array): Standardized genotype matrix
+        '''
+        if G is None:
+            G = self.G
+            p = self.p
+            P = self.P
+        else:
+            if p is None:
+                p = self.get_freq(G)
+            if P is None:
+                P = self.P
+        G = self.center_G(G, p, P)
+        
+        if np.ma.isMaskedArray(G) and impute:
+            G[G.mask] = 0
+            G = G.data
+
+        if std_method == 'binomial':
+            var_G = P * p * (1 - p) 
+        elif std_method == 'observed': # Ensures Var[G] = 1
+            var_G = G.var(axis=0)
+        
+        # replaces monomorph variances with 1 so no divide by 0 error
+        var_G[var_G == 0] = 1
+        
+        G /= np.sqrt(var_G)[None,:]
+        return G # now normalized, so actually X
 
     ####################################
     #### Simulating forward in time ####
