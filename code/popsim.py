@@ -445,16 +445,18 @@ class Population:
         H = self._generate_unrelated_haplotypes(p)
         self._update_obj(H=H)
 
-    def simulate_generations(self, generations: int, record_history: bool = True,
-                             mu: float = 0, s: Union[float, np.ndarray] = 0):
+    def simulate_generations(self, generations: int, related_offspring: bool = False,
+                             mu: float = 0, s: Union[float, np.ndarray] = 0,
+                             record_history: bool = True ):
         '''
-        Simulates specified number of generations beyond current generation. Doesn't simulate offspring directly, meaning that future offspring have haplotypes drawn randomly from allele frequencies. Automatically updates object.
+        Simulates specified number of generations beyond current generation. Can simulate offspring directly. Automatically updates object.
 
         Parameters:
             generations (int): Number of generations to simulate (beyond the current generation).
-            record_history (bool): Determines if allele frequencies at each generation are saved to a matrix belonging to the object. Default is True.
+            related_offspring (bool): Whether the offspring of the next generation should be directly related to parents from previous generation by simulating meiosis and haplotype transfer. Default is False, meaning that future offspring have haplotypes drawn randomly from allele frequencies.
             s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
             mu (float): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
+            record_history (bool): Determines if allele frequencies at each generation are saved to a matrix belonging to the object. Default is True.
         '''
         # keeps track of allele frequencies over generations if specified
         if record_history:
@@ -465,7 +467,10 @@ class Population:
         
         # loops through each generation
         for t in range(generations):
-            self.next_generation(mu=mu, s=s)
+            if related_offspring:
+                self.generate_offspring()
+            else:
+                self.next_generation(mu=mu, s=s)
             # records allele frequency
             if record_history:
                 ps[previous_gens + t,] = self.p
