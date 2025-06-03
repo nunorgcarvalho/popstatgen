@@ -435,8 +435,8 @@ class Population:
         H = np.random.binomial( 1, p = p, size = (self.N, self.M, self.P))
         return H
         
-    def next_generation(self, s: Union[float, np.ndarray] = 0,
-                        mu: Union[float, np.ndarray] = 0):
+    def next_generation(self, s: Union[float, np.ndarray] = 0.0,
+                        mu: Union[float, np.ndarray] = 0.0):
         '''
         Simulates new generation. Doesn't simulate offspring directly, meaning that future offspring have haplotypes drawn randomly from allele frequencies. Automatically updates object.
 
@@ -445,7 +445,7 @@ class Population:
             mu (float or 1D array): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
         '''
         # assigns same selection coefficient/mutation rate to all variants if only single value specified
-        if type(s) == float:
+        if isinstance(s, (float, int)):
             s = np.full(self.M, s)
         if isinstance(mu, (float, int)):
             mu = np.full(self.M, mu)
@@ -543,7 +543,7 @@ class Population:
 
         return (iMs, iPs)
 
-    def generate_offspring(self, replace: bool = True,
+    def generate_offspring(self, replace: bool = True, s: Union[float, np.ndarray] = 0,
                            mu: Union[float, np.ndarray] = 0,
                            **kwargs):
         '''
@@ -551,6 +551,7 @@ class Population:
 
         Parameters:
             replace (bool): Whether the offspring replace the current generation. Default is True.
+            s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
             mu (float or 1D array): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
             **kwargs: All other arguments (related to assortative mating) are passed to the `_pair_mates` method. See that method for details.
         
@@ -560,15 +561,27 @@ class Population:
         # checks ploidy
         if self.P != 2:
             raise Exception('Offspring generation only works for diploids.')
-                
+
+        # Assortative Mating ####        
         # pairs up mates
         iMs, iPs = self._pair_mates()
-        iMs = np.concatenate([iMs, iMs])
-        iPs = np.concatenate([iPs, iPs])
 
+        # Selection ####
+        if isinstance(s, (float, int)):
+            s = np.full(self.M, s)
+        # computes individuals' breeding weight (assumes linear additive fitness effects)
+        W = np.exp( (np.log(1 + self.G * s[None, :])).sum(axis=1) )
+        # computes each pair's breeding weight
+        W_pair = W[iMs] * W[iPs]
+        # computs probability of each parent pair being chosen to mate for one offspring
+        P_mate = W_pair / W_pair.sum()
         # determines population size of next generation (currently maintains population size)
         N_offspring = self.N
+        # draws indices of parents for each offspring
+        i_mate = np.random.choice(np.arange(len(iMs)), size=N_offspring, p=P_mate)
+        parents = np.stack((iMs[i_mate], iPs[i_mate]), axis=1)
         
+        # Drift + Recombination ####
         # generates variants for which a crossover event happens for each parent of each offspring
         crossover_events = np.random.binomial(n=1, p=self.R.reshape(1, self.M, 1),
                                               size=(N_offspring, self.M, 2))
@@ -580,10 +593,9 @@ class Population:
         haplo_ks = (haplo_k0[:, None, :] + haplo_phase) % 2
 
         H = np.empty((N_offspring, self.M, self.P), dtype=int)
-        parents = np.full((N_offspring,2), -1)
         for i in np.arange(N_offspring):
-            iM = iMs[i]
-            iP = iPs[i]
+            iM = parents[i,0]
+            iP = parents[i,1]
             # extract allele from correct haplotype of each parent
             haploM = self.H[iM, np.arange(self.M), haplo_ks[i, :, 0]]
             haploP = self.H[iP, np.arange(self.M), haplo_ks[i, :, 1]]
@@ -591,10 +603,8 @@ class Population:
             # shuffles haplotypes around
             haplos = haplos[:,np.random.choice(self.P, size=self.P, replace=False)]
             H[i,:,:] = haplos
-            # stores parental information
-            parents[i,:] = [iM, iP]
 
-        # Mutations
+        # Mutations ####
         if isinstance(mu, (float, int)):
             mu = np.full(self.M, mu)
         mutations = np.random.binomial(n=1, p=mu[None,:,None], size = (N_offspring, self.M, self.P))
