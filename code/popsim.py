@@ -460,18 +460,16 @@ class Population:
         self._update_obj(H=H)
 
     def simulate_generations(self, generations: int, related_offspring: bool = False,
-                             mu: Union[float, np.ndarray] = 0,
-                             s: Union[float, np.ndarray] = 0, R: Union[float, np.ndarray] = None,
-                             record_history: bool = True):
+                             record_history: bool = True, **kwargs):
         '''
         Simulates specified number of generations beyond current generation. Can simulate offspring directly. Automatically updates object. Recombination rates are extracted from object attributes.
 
         Parameters:
             generations (int): Number of generations to simulate (beyond the current generation).
             related_offspring (bool): Whether the offspring of the next generation should be directly related to parents from previous generation by simulating meiosis and haplotype transfer. Default is False, meaning that future offspring have haplotypes drawn randomly from allele frequencies.
-            mu (float): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
-            s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
             record_history (bool): Determines if allele frequencies at each generation are saved to a matrix belonging to the object. Default is True.
+            **kwargs: All other arguments are passed to the `next_generation` or `generate_offspring` methods. See those methods for details.
+            
         '''
         # keeps track of allele frequencies over generations if specified
         if record_history:
@@ -483,20 +481,27 @@ class Population:
         # loops through each generation
         for t in range(generations):
             if related_offspring:
-                self.generate_offspring(mu=mu)
+                self.generate_offspring(**kwargs)
             else:
-                self.next_generation(mu=mu, s=s)
+                self.next_generation(**kwargs)
             # records allele frequency
             if record_history:
                 ps[previous_gens + t,] = self.p
         self.T_breaks.append(previous_gens + generations)
+        self.update_traits(fixed_h2=False)
         # saves allele freqs. at each generation (keeps old generations)
         if record_history:
             self.ps = ps
 
-    def _pair_mates(self) -> np.ndarray:
+    def _pair_mates(self, AM_r: float = 0, AM_trait: Union[str, np.ndarray] = None,
+                    AM_type: str = 'phenotypic') -> np.ndarray:
         '''
-        Pairs individuals up monogamously to mate and generate offspring. Population size must be multiple of 2. In the future will allow for assortative mating (phenotypic and genetic). 
+        Pairs individuals up monogamously to mate and generate offspring. Population size must be multiple of 2. Allows for assortative mating (AM) if specified.
+
+        Parameters:
+            AM_r (float): Desired correlation between AM trait values of spouses. Default is 0 (no assortative mating).
+            AM_trait (str or 1D array): If a string, the name of the trait to use for assortative mating (as stored in the object). If an array, the trait values to use for assortative mating. If None, no assortative mating is performed. Default is None.
+            AM_type (str): Type of assortative mating to perform. If 'phenotypic', uses the trait values directly. If 'genetic', uses the genetic values (only for object's stored traits). Default is 'phenotypic'.
 
         Returns:
             tuple ((iM, iP)):
@@ -508,21 +513,46 @@ class Population:
         if self.N % 2 != 0:
             raise Exception('Population size must be multiple of 2.')
         N2 = self.N // 2
+
+        # extracts assortative mating value:
+        if AM_r != 0 and AM_trait is not None:
+            if type(AM_trait) == np.ndarray:
+                AM_values = AM_trait
+            elif type(AM_trait) == str:
+                if AM_trait not in self.traits:
+                    raise Exception(f'Trait {AM_trait} not found in population traits.')
+                if AM_type == 'phenotypic':
+                    AM_values = self.traits[AM_trait].y
+                elif AM_type == 'genetic':
+                    AM_values = self.traits[AM_trait].genetic_value
+            # standardizes
+            AM_values = (AM_values - AM_values.mean()) / AM_values.std()
+        else:
+            AM_values = np.zeros(self.N)
+
         # randomly splits up population into maternal (M) and paternal (P) halves 
         # also shuffles their order
         iMs = np.random.choice(self.N, N2, replace=False)
         iPs = np.setdiff1d(np.arange(self.N), iMs)
 
+        # computes mate value
+        mate_values = AM_r * AM_values + np.random.normal(scale = np.sqrt(1-AM_r**2), size=self.N)
+        # sorts mothers and fathers by mate value
+        iMs = iMs[np.argsort(AM_values[iMs])]
+        iPs = iPs[np.argsort(mate_values[iPs])]    
+
         return (iMs, iPs)
 
     def generate_offspring(self, replace: bool = True,
-                           mu: Union[float, np.ndarray] = 0):
+                           mu: Union[float, np.ndarray] = 0,
+                           **kwargs):
         '''
         Pairs up mates and generates offspring for parents' haplotypes. Only works for diploids. Each pair always has two offspring. Recombination rates are extracted from object attributes.
 
         Parameters:
             replace (bool): Whether the offspring replace the current generation. Default is True.
             mu (float or 1D array): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
+            **kwargs: All other arguments (related to assortative mating) are passed to the `_pair_mates` method. See that method for details.
         
         Returns:
             H (3D array): N*M*P array of offspring haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
@@ -763,7 +793,7 @@ class Trait:
         self.generate_trait(X)
 
     @staticmethod
-    def generate_causal_effects(M: int, M_causal: int = None, var_G: float = 1.0):
+    def generate_causal_effects(M: int, M_causal: int = None, var_G: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
         '''
         Generates variant effect sizes for some trait. Default interpretation is per-standardized-allele effect sizes. Non-causal variant effects are set to 0. Causal effects are drawn from normal distribution with mu=0 and sd=`var_G`/`M_causal`.
 
@@ -783,7 +813,7 @@ class Trait:
         return causal_effects, j_causal
     
     @staticmethod
-    def compute_genetic_value(X: np.ndarray, effects: np.ndarray):
+    def compute_genetic_value(X: np.ndarray, effects: np.ndarray) -> np.ndarray:
         '''
         Computes the genetic value/score given a (standardized) genotype matrix and (per-standardized-allele) effect sizes.
 
@@ -798,7 +828,7 @@ class Trait:
         return y
     
     @staticmethod
-    def generate_noise_value(N: int, var_Eps: float = 0.0):
+    def generate_noise_value(N: int, var_Eps: float = 0.0) -> np.ndarray:
         '''
         Generates noise component of trait drawn randomly from Normal distribution.
 
@@ -835,7 +865,7 @@ class Trait:
         # computes actual trait as additive of individual components
         self.y = y_nonEps + self.noise_value
 
-    def get_h2_true(self):
+    def get_h2_true(self) -> float:
         '''
         Returns the true narrow-sense heritability of the trait, which is variance of the genetic component divided by the variance of the trait.
         
