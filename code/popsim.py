@@ -453,18 +453,19 @@ class Population:
         H = np.random.binomial( 1, p = p, size = (self.N, self.M, self.P))
         return H
         
-    def next_generation(self, s: Union[float, np.ndarray] = 0, mu: float = 0):
+    def next_generation(self, s: Union[float, np.ndarray] = 0,
+                        mu: Union[float, np.ndarray] = 0):
         '''
         Simulates new generation. Doesn't simulate offspring directly, meaning that future offspring have haplotypes drawn randomly from allele frequencies. Automatically updates object.
 
         Parameters:
             s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
-            mu (float): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
+            mu (float or 1D array): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
         '''
         # assigns same selection coefficient/mutation rate to all variants if only single value specified
         if type(s) == float:
             s = np.full(self.M, s)
-        if type(mu) == float:
+        if isinstance(mu, (float, int)):
             mu = np.full(self.M, mu)
         # analytical allele frequency from which next generations' alleles are drawn from
         p = self.p
@@ -477,7 +478,8 @@ class Population:
         self._update_obj(H=H)
 
     def simulate_generations(self, generations: int, related_offspring: bool = False,
-                             mu: float = 0, s: Union[float, np.ndarray] = 0, R: Union[float, np.ndarray] = None,
+                             mu: Union[float, np.ndarray] = 0,
+                             s: Union[float, np.ndarray] = 0, R: Union[float, np.ndarray] = None,
                              record_history: bool = True):
         '''
         Simulates specified number of generations beyond current generation. Can simulate offspring directly. Automatically updates object. Recombination rates are extracted from object attributes.
@@ -499,7 +501,7 @@ class Population:
         # loops through each generation
         for t in range(generations):
             if related_offspring:
-                self.generate_offspring()
+                self.generate_offspring(mu=mu)
             else:
                 self.next_generation(mu=mu, s=s)
             # records allele frequency
@@ -531,12 +533,14 @@ class Population:
 
         return (iMs, iPs)
 
-    def generate_offspring(self, replace: bool = True):
+    def generate_offspring(self, replace: bool = True,
+                           mu: Union[float, np.ndarray] = 0):
         '''
         Pairs up mates and generates offspring for parents' haplotypes. Only works for diploids. Each pair always has two offspring. Recombination rates are extracted from object attributes.
 
         Parameters:
             replace (bool): Whether the offspring replace the current generation. Default is True.
+            mu (float or 1D array): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
         
         Returns:
             H (3D array): N*M*P array of offspring haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
@@ -577,6 +581,13 @@ class Population:
             H[i,:,:] = haplos
             # stores parental information
             parents[i,:] = [iM, iP]
+
+        # Mutations
+        if isinstance(mu, (float, int)):
+            mu = np.full(self.M, mu)
+        mutations = np.random.binomial(n=1, p=mu[None,:,None], size = (N_offspring, self.M, self.P))
+        # Apply mutations by flipping alleles (0 to 1 or 1 to 0) based on the mutation matrix
+        H = (H + mutations) % 2
 
         if replace:
             self._update_obj(H=H)
@@ -647,7 +658,8 @@ class Population:
         plt.show()
 
     def plot_LD_matrix(self, LD_matrix: sparse.csr_matrix = None,
-                      plot_range: Tuple[int, int] = None, type: str = 'LD'):
+                      plot_range: Tuple[int, int] = None, type: str = 'LD',
+                      omit_mono: bool = False):
         '''
         Plots LD/correlation between variants.
 
@@ -655,6 +667,7 @@ class Population:
             LD_matrix (sparse 2D matrix): Either an LD or correlation M*M matrix of variants. If not provided, uses object's LD/correlation matrix.
             plot_range (tuple): A tuple of length 2 containing the range of variant indices to plot. If not provided, plots all variants.
             type (str): Uses color scheme for either 'LD' (default) or 'corr' matrix.
+            omit_mono (bool): Whether variants that are monomorphic (p = 0 or 1) should be skipped over when plotting. Default is False.
         '''
         if LD_matrix is None:
             if type == 'LD':
@@ -668,6 +681,12 @@ class Population:
             stop = LD_matrix.shape[0]
         # Convert the sparse matrix to a dense array
         LD_matrix_dense = LD_matrix[start:stop, start:stop].toarray()
+        
+        # Skips plotting monomorphic variants
+        if omit_mono:
+            j_mono = (self.p == 0) | (self.p == 1)
+            LD_matrix_dense = np.delete(LD_matrix_dense, j_mono, axis=0)
+            LD_matrix_dense = np.delete(LD_matrix_dense, j_mono, axis=1)
 
         # Create the heatmap
         plt.figure(figsize=(10, 8))
