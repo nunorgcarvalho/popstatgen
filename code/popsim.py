@@ -29,7 +29,8 @@ class Population:
         self.N = N
         self.M = M
         self.P = P
-        self.T_breaks = [0]
+        self.t = 0 # generation
+        self.T_breaks = [self.t]
         self.traits = {}
         # stores variants' positions
         self.BPs = np.arange(M)
@@ -354,6 +355,7 @@ class Population:
         self.traits[name] = Trait(self.X, **kwargs)
         # stores actual heritability value
         self.traits[name].h2_true = self.traits[name].get_h2_true()
+        self.traits[name].h2_trues = np.expand_dims(self.traits[name].h2_true, axis=0)
     
     def update_traits(self, fixed_h2: bool = True, traits: list = None):
         '''
@@ -371,6 +373,13 @@ class Population:
                 continue
             trait = self.traits[key]
             trait.generate_trait(self.X, fixed_h2=fixed_h2)
+            # computes true heritability
+            trait.h2_true = trait.get_h2_true()
+            # adds to running heritability history
+            t_last = trait.h2_trues.shape[0]
+            h2_add = np.full(self.t - t_last + 1, np.nan)
+            h2_add[-1] = trait.h2_true
+            trait.h2_trues = np.concatenate( (trait.h2_trues, h2_add) )
 
     #######################################
     #### Analysis of object attributes ####
@@ -457,26 +466,26 @@ class Population:
         p = p*(1-mu) + (1-p)*mu
         # effect of genetic drift
         H = self._generate_unrelated_haplotypes(p)
+
+        self.t = self.t + 1
         self._update_obj(H=H)
 
     def simulate_generations(self, generations: int, related_offspring: bool = False,
-                             record_history: bool = True, **kwargs):
+                             trait_updates: bool = False, fixed_h2: bool = False,
+                             **kwargs):
         '''
         Simulates specified number of generations beyond current generation. Can simulate offspring directly. Automatically updates object. Recombination rates are extracted from object attributes.
 
         Parameters:
             generations (int): Number of generations to simulate (beyond the current generation).
             related_offspring (bool): Whether the offspring of the next generation should be directly related to parents from previous generation by simulating meiosis and haplotype transfer. Default is False, meaning that future offspring have haplotypes drawn randomly from allele frequencies.
-            record_history (bool): Determines if allele frequencies at each generation are saved to a matrix belonging to the object. Default is True.
+            trait_updates (bool): Whether to update traits after each generation. Default is False, meaning that traits are only updated at the end of the simulation.
             **kwargs: All other arguments are passed to the `next_generation` or `generate_offspring` methods. See those methods for details.
-            
         '''
         # keeps track of allele frequencies over generations if specified
-        if record_history:
-            # checks if previous generations have already been generated or not
-            previous_gens = self.ps.shape[0]
-            ps = np.full( (previous_gens + generations, self.M), np.nan)
-            ps[0:previous_gens,] = self.ps
+        previous_gens = self.ps.shape[0]
+        ps = np.full( (previous_gens + generations, self.M), np.nan)
+        ps[0:previous_gens,] = self.ps
         
         # loops through each generation
         for t in range(generations):
@@ -484,14 +493,15 @@ class Population:
                 self.generate_offspring(**kwargs)
             else:
                 self.next_generation(**kwargs)
-            # records allele frequency
-            if record_history:
-                ps[previous_gens + t,] = self.p
+            # records metrics
+            ps[previous_gens + t,] = self.p
+            if trait_updates:
+                self.update_traits(fixed_h2=fixed_h2)
         self.T_breaks.append(previous_gens + generations)
-        self.update_traits(fixed_h2=False)
-        # saves allele freqs. at each generation (keeps old generations)
-        if record_history:
-            self.ps = ps
+        if not trait_updates:
+            self.update_traits(fixed_h2=fixed_h2)
+        # saves metrics to object
+        self.ps = ps
 
     def _pair_mates(self, AM_r: float = 0, AM_trait: Union[str, np.ndarray] = None,
                     AM_type: str = 'phenotypic') -> np.ndarray:
@@ -543,14 +553,13 @@ class Population:
 
         return (iMs, iPs)
 
-    def generate_offspring(self, replace: bool = True, s: Union[float, np.ndarray] = 0,
+    def generate_offspring(self, s: Union[float, np.ndarray] = 0,
                            mu: Union[float, np.ndarray] = 0,
                            **kwargs):
         '''
         Pairs up mates and generates offspring for parents' haplotypes. Only works for diploids. Each pair always has two offspring. Recombination rates are extracted from object attributes.
 
         Parameters:
-            replace (bool): Whether the offspring replace the current generation. Default is True.
             s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
             mu (float or 1D array): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
             **kwargs: All other arguments (related to assortative mating) are passed to the `_pair_mates` method. See that method for details.
@@ -611,10 +620,8 @@ class Population:
         # Apply mutations by flipping alleles (0 to 1 or 1 to 0) based on the mutation matrix
         H = (H + mutations) % 2
 
-        if replace:
-            self._update_obj(H=H)
-        else:
-            return H
+        self.t = self.t + 1
+        self._update_obj(H=H)
 
     #######################
     #### Visualization ####
@@ -636,7 +643,9 @@ class Population:
             aes_line (dict): Dictionary of aesthetic parameters for the lines in the plot.
             legend (bool): Whether to include a legend in the plot for each line. Default is False.
         '''
-        K = metrics.shape[1] if metrics.ndim > 1 else 1
+        if metrics.ndim == 1:
+            metrics = metrics.reshape(-1, 1)
+        K = metrics.shape[1]
         # fills out aes_line settings
         # color
         if aes_line['color'] is None:
@@ -657,7 +666,7 @@ class Population:
         labels = aes_line['labels']
 
         if ts is None:
-            ts = np.arange(metric.shape[0])
+            ts = np.arange(metrics.shape[0])
 
         # plotting
         plt.figure(figsize=(8, 5))
@@ -683,7 +692,6 @@ class Population:
             plt.legend()
         plt.tight_layout()
         plt.show()
-
 
     def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: tuple = None,
                             legend=False, last_generations: int = None,
@@ -734,7 +742,6 @@ class Population:
 
         self.plot_over_time(metrics, ts, aes=aes, aes_line=aes_line, legend=legend)
         
-
     def plot_LD_matrix(self, LD_matrix: sparse.csr_matrix = None,
                       plot_range: Tuple[int, int] = None, type: str = 'LD',
                       omit_mono: bool = False):
@@ -849,19 +856,19 @@ class Trait:
     Class for a trait belonging to a Population object.
     '''
 
-    def __init__(self, X: np.ndarray, M_causal: int = None,
+    def __init__(self, G: np.ndarray, M_causal: int = None,
                  var_G: float = 1.0, var_Eps: float = 0.0):
         '''
         Initializes and generates trait.
 
         Parameters:
-            X (2D array): N*M standardized genotype matrix
+            G (2D array): N*M NON-standardized genotype matrix.
             M_causal (int): Number of causal variants (variants with non-zero effect sizes). Default is all variants.
             var_G (float): Total expected variance contributed by per-standardized-allele genetic effects. Default is 1.0.
             var_Eps (float): Total expected variance contributed by random noise.
         '''
         # stores trait properties
-        self.M = X.shape[1]
+        self.M = G.shape[1]
         self.var = {}
         self.var['G'] = var_G
         self.var['Eps'] = var_Eps
@@ -869,9 +876,10 @@ class Trait:
         self.h2 = var_G / (var_G + var_Eps)
         # computes causal effects
         self.effects, self.j_causal = self.generate_causal_effects(self.M, M_causal, self.var['G'])
+        self.effects_per_allele = self.effects / G.std(axis=0) 
         self.M_causal = len(self.j_causal)
         # computes trait 
-        self.generate_trait(X)
+        self.generate_trait(G)
 
     @staticmethod
     def generate_causal_effects(M: int, M_causal: int = None, var_G: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
@@ -894,18 +902,18 @@ class Trait:
         return causal_effects, j_causal
     
     @staticmethod
-    def compute_genetic_value(X: np.ndarray, effects: np.ndarray) -> np.ndarray:
+    def compute_genetic_value(G: np.ndarray, effects: np.ndarray) -> np.ndarray:
         '''
         Computes the genetic value/score given a (standardized) genotype matrix and (per-standardized-allele) effect sizes.
 
         Parameters:
-            X (2D array): N*M genotype matrix. Assumed to be standardized genotypes.
+            G (2D array): N*M NON-standardized genotype matrix.
             effects (1D array): Array of length M containing causal and non-causal genetic effects.
         Returns:
             y (1D array): Array of length N containing trait values.
         '''
         # dot product
-        y = X @ effects
+        y = G @ effects
         return y
     
     @staticmethod
@@ -922,17 +930,17 @@ class Trait:
         noise_value = np.random.normal(loc=0, scale=np.sqrt(var_Eps), size = N)
         return noise_value
 
-    def generate_trait(self, X: np.ndarray, fixed_h2: bool = True):
+    def generate_trait(self, G: np.ndarray, fixed_h2: bool = True):
         '''
         Generates/updates trait using stored genetic effects and recomputing other components. Automatically updates object's attributes, instead of returning trait values.
 
         Parameters:
-            X (2D array): N*M standardized genotype matrix.
-            fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Default is True.
+            G (2D array): N*M NON-standardized genotype matrix.
+            fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Genetic component must be non-zero. Default is True.
         '''
-        N = X.shape[0]
-        # genetic component
-        self.genetic_value = self.compute_genetic_value(X, self.effects)
+        N = G.shape[0]
+        # genetic component (using per-allele effects)
+        self.genetic_value = self.compute_genetic_value(G, self.effects_per_allele)
 
         var_Eps = self.var['Eps']
         y_nonEps = self.genetic_value
