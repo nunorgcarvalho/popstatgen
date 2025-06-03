@@ -620,6 +620,71 @@ class Population:
     #### Visualization ####
     #######################
 
+    def plot_over_time(self,
+                       metrics: np.ndarray,
+                       ts: np.ndarray = None,
+                       aes: dict = {'title': None, 'xlabel': None, 'ylabel': None},
+                       aes_line: dict = {'color': None, 'ls': None, 'labels': None},
+                       legend: bool = True):
+        '''
+        General function for plotting some metric over time.
+
+        Parameters:
+            metric (1D or 2D array): Metric(s) to plot over time. If a T*K 2D matrix, each column is treated as a different line to plot.
+            ts (1D array): Array of time points (generations) corresponding to the metric. If not specified, defaults to the range of generations in the metric.
+            aes (dict): Dictionary of aesthetic parameters for the plot.
+            aes_line (dict): Dictionary of aesthetic parameters for the lines in the plot.
+            legend (bool): Whether to include a legend in the plot for each line. Default is False.
+        '''
+        K = metrics.shape[1] if metrics.ndim > 1 else 1
+        # fills out aes_line settings
+        # color
+        if aes_line['color'] is None:
+            aes_line['color'] = self._get_default_colors(K)
+        if type(aes_line['color']) == str:
+            aes_line['color'] = [aes_line['color']] * K
+        colors = aes_line['color']
+        # line style
+        if aes_line['ls'] is None:
+            aes_line['ls'] = '-'
+        if type(aes_line['ls']) == str:
+            aes_line['ls'] = [aes_line['ls']] * K
+        ls = aes_line['ls']
+        # labels
+        if aes_line['labels'] is None:
+            aes_line['labels'] = [f'Line {j}' for j in range(K)] # not shown
+            legend=False
+        labels = aes_line['labels']
+
+        if ts is None:
+            ts = np.arange(metric.shape[0])
+
+        # plotting
+        plt.figure(figsize=(8, 5))
+        # plots lines
+        for j in range(K):
+            plt.plot(ts, metrics[:, j],
+                     color=colors[j],
+                     ls=ls[j],
+                     label=labels[j])
+        # vertical lines denoting simulation batches
+        for t in self.T_breaks:
+            plt.axvline(t, ls='--', color='black')
+        # labels
+        if aes['xlabel'] is not None:
+            plt.xlabel(aes['xlabel'])
+        if aes['ylabel'] is not None:
+            plt.ylabel(aes['ylabel'])
+        if aes['title'] is not None:
+            plt.title(aes['title'])
+        plt.xlim(ts.min(), ts.max())
+        plt.ylim(0, 1)
+        if legend:
+            plt.legend()
+        plt.tight_layout()
+        plt.show()
+
+
     def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: tuple = None,
                             legend=False, last_generations: int = None,
                             summarize: bool = False, quantiles: tuple = (0.25, 0.5, 0.75)):
@@ -653,31 +718,22 @@ class Population:
         # if True, gets mean and quartiles for variants over time, which are plotted instead
         if summarize:
             ps_mean, ps_quantile = self.summarize_ps(ps, quantiles)
-        
-        # plotting
-        plt.figure(figsize=(8, 5))
-        # allele frequency lines
-        if not summarize:
-            for j in range(ps.shape[1]):
-                plt.plot(ts, ps[:, j], label=f'Variant {j_keep[j]}')
+            metrics = np.column_stack((ps_mean, ps_quantile.T))
+            aes_line = {'color': ['deepskyblue'] + ['lightskyblue'] * len(quantiles),
+                        'ls': ['--'] + [':'] * len(quantiles),
+                        'labels': ['Mean'] + [f'{q*100}% percentile' for q in quantiles]}
         else:
-            plt.plot(ts, ps_mean, color='deepskyblue', label = 'Mean', ls='--')
-            for j in range(len(quantiles)):
-                plt.plot(ts, ps_quantile[j,:], label=f'{quantiles[j]*100}% percentile', color = 'lightskyblue', ls=':')
+            # gets metrics to plot
+            metrics = ps
+            aes_line = {'color': None, 'ls': '-',
+                        'labels': [f'Variant {j_keep[j]}' for j in range(len(j_keep))]}
+        # plot aesthetics
+        aes = {'title': 'Allele Frequency Trajectories Over Time',
+               'xlabel': 'Generation',
+               'ylabel': 'Allele Frequency'}
 
-        # vertical lines denoting simulation batches
-        for t in self.T_breaks:
-            plt.axvline(t, ls='--', color='black')
-        # labels
-        plt.xlabel('Generation')
-        plt.ylabel('Allele Frequency')
-        plt.title('Allele Frequency Trajectories Over Time')
-        plt.xlim(ts.min(), ts.max())
-        plt.ylim(0, 1)
-        if legend:
-            plt.legend()
-        plt.tight_layout()
-        plt.show()
+        self.plot_over_time(metrics, ts, aes=aes, aes_line=aes_line, legend=legend)
+        
 
     def plot_LD_matrix(self, LD_matrix: sparse.csr_matrix = None,
                       plot_range: Tuple[int, int] = None, type: str = 'LD',
@@ -772,6 +828,21 @@ class Population:
             return p_init
         else:
             return np.full(M, np.nan)
+
+    @staticmethod
+    def _get_default_colors(n_lines):
+        '''
+        Returns a list of colors for plotting lines, cycling through matplotlib's default color cycle.
+
+        Parameters:
+            n_lines (int): Number of lines to generate colors for.
+        Returns:
+            colors (list): List of colors for plotting lines.
+        '''
+        prop_cycle = plt.rcParams['axes.prop_cycle']
+        colors = [c['color'] for c in prop_cycle]
+        # Repeat colors if n_lines > length of color cycle
+        return [colors[i % len(colors)] for i in range(n_lines)]
 
 class Trait:
     '''
