@@ -305,7 +305,7 @@ class Population:
             if hasattr(self, 'neighbor_matrix'):
                 neighbor_matrix = self.neighbor_matrix
             else:
-                raise Exception('Must have pre-computed neighbor_matrix. Use `Population.get_neighbor_matrix().')
+                raise Exception('Must have pre-computed neighbor_matrix. Use `Population.get_neighbor_matrix()`.')
         # Lists to store row indices, column indices, and data for the sparse matrix
         rows = []
         cols = []
@@ -314,15 +314,16 @@ class Population:
         for i, j in zip(neighbor_matrix.row, neighbor_matrix.col):
             if i < j:  # Only compute for upper triangle (including diagonal)
                 # Compute the dot product for (i, j)
-                ld_value = (X[:, i] * X[:, j]).mean()
+                #corr_value = (X[:, i] * X[:, j]).mean()
+                corr_value = X[:, i].dot(X[:, j]) / X.shape[0]
                 # Add (i, j) and (j, i) to the sparse matrix
                 rows.append(i)
                 cols.append(j)
-                data.append(ld_value)
+                data.append(corr_value)
                 if i != j:  # Avoid duplicating the diagonal
                     rows.append(j)
                     cols.append(i)
-                    data.append(ld_value)
+                    data.append(corr_value)
         # Add diagonal entries (set to 1)
         M = X.shape[1]
         for i in range(M):
@@ -330,8 +331,7 @@ class Population:
             cols.append(i)
             data.append(1.0)
         # Create the sparse matrix in COO format
-        corr_matrix = sparse.coo_matrix((data, (rows, cols)), shape=(M, M))
-        corr_matrix = corr_matrix.tocsr()  # Convert to CSR format for efficient row slicing
+        corr_matrix = sparse.csr_matrix((data, (rows, cols)), shape=(M, M))
         
         if replace:
             self.corr_matrix = corr_matrix
@@ -446,16 +446,17 @@ class Population:
         self._update_obj(H=H)
 
     def simulate_generations(self, generations: int, related_offspring: bool = False,
-                             mu: float = 0, s: Union[float, np.ndarray] = 0,
-                             record_history: bool = True ):
+                             mu: float = 0, s: Union[float, np.ndarray] = 0, R: Union[float, np.ndarray] = None,
+                             record_history: bool = True):
         '''
         Simulates specified number of generations beyond current generation. Can simulate offspring directly. Automatically updates object.
 
         Parameters:
             generations (int): Number of generations to simulate (beyond the current generation).
             related_offspring (bool): Whether the offspring of the next generation should be directly related to parents from previous generation by simulating meiosis and haplotype transfer. Default is False, meaning that future offspring have haplotypes drawn randomly from allele frequencies.
-            s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
             mu (float): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
+            s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
+            R (float or 1D array): Recombination rate, such that at a specific locus, there is a probability of R of switching which allele is inherited from a parent. Default is 1/M.
             record_history (bool): Determines if allele frequencies at each generation are saved to a matrix belonging to the object. Default is True.
         '''
         # keeps track of allele frequencies over generations if specified
@@ -468,7 +469,7 @@ class Population:
         # loops through each generation
         for t in range(generations):
             if related_offspring:
-                self.generate_offspring()
+                self.generate_offspring(R=R)
             else:
                 self.next_generation(mu=mu, s=s)
             # records allele frequency
@@ -500,7 +501,7 @@ class Population:
 
         return (iMs, iPs)
 
-    def generate_offspring(self, replace: bool = True):
+    def generate_offspring(self, replace: bool = True, R: Union[float, np.ndarray] = None):
         '''
         Pairs up mates and generates offspring for parents' haplotypes. Only works for diploids. Each pair always has two offspring.
 
@@ -509,53 +510,55 @@ class Population:
         
         Returns:
             H (3D array): N*M*P array of offspring haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
+            R (float or 1D array): Recombination rate, such that at a specific locus, there is a probability of R of switching which allele is inherited from a parent. Default is 1/M.
         '''
         # checks ploidy
         if self.P != 2:
             raise Exception('Offspring generation only works for diploids.')
+        
+        # if no recombination rate is given, it is set to 1/M
+        if R is None:
+            R = 1 / self.M
+        # assigns same recombination rate to all variants if only single value specified
+        if type(R) == float:
+            R = np.full(self.M, R)
+        
         # pairs up mates
         iMs, iPs = self._pair_mates()
+        iMs = np.concatenate([iMs, iMs])
+        iPs = np.concatenate([iPs, iPs])
 
         # determines population size of next generation (currently maintains population size)
-        N_pairs = self.N // 2
-        N_offspring_per_pair = 2 # to maintain population size
-        N_offspring = N_pairs * N_offspring_per_pair
+        N_offspring = self.N
         
-        # randomly chooses haplotype to keep from each parent
-        hMs = np.random.binomial(1, 0.5, size = (N_pairs, N_offspring_per_pair))
-        hPs = np.random.binomial(1, 0.5, size = (N_pairs, N_offspring_per_pair))
+        # generates variants for which a crossover event happens for each parent of each offspring
+        crossover_events = np.random.binomial(n=1, p=R.reshape(1, self.M, 1), size=(N_offspring, self.M, 2))
+        # determines the shift in haplotype phase for each parent's haplotype at each variant
+        haplo_phase = np.cumsum(crossover_events, axis=1)
+        # randomly chooses haplotype to start with for each parent of each offspring
+        haplo_k0 = np.random.binomial(n=1, p=1/self.P, size = (N_offspring ,2))
+        # adds the starting shift and gets the modulo so that haplotype phase acts as an index
+        haplo_ks = (haplo_k0[:, None, :] + haplo_phase) % 2
 
-        # initializes arrays
         H = np.empty((N_offspring, self.M, self.P), dtype=int)
-        K_MP = self.K.copy() # parental kinship matrix
-        K = np.diag(np.full(N_offspring, 0.5)) # offspring kinship matrix
-        # loops through each mate pair
-        for i in range(N_pairs):
+        parents = np.full((N_offspring,2), -1)
+        for i in np.arange(N_offspring):
             iM = iMs[i]
             iP = iPs[i]
-            # indices of offspring
-            iOs = (N_offspring_per_pair*i)+np.arange(N_offspring_per_pair)
-            # looks through each offspring of pair
-            for j in range(len(iOs)):
-                iO = iOs[j]
-                haploM = self.H[iM,:,hMs[i,j]]
-                haploP = self.H[iP,:,hPs[i,j]]
-                haplos = np.stack((haploM, haploP), axis = 1)
-                # shuffles haplotypes around
-                haplos = haplos[:,np.random.choice(self.P, size=self.P, replace=False)]
-                H[iO,:,:] = haplos
-
-                # updates lower triangle of kinship matrix
-                for jj in range(j + 1, len(iOs)):
-                    K[iOs[j], iOs[jj]] = (1 + K_MP[iM, iP]) / 2
-
-        # fils out upper triangle of kinship matrix:
-        K += K.T
+            # extract allele from correct haplotype of each parent
+            haploM = self.H[iM, np.arange(self.M), haplo_ks[i, :, 0]]
+            haploP = self.H[iP, np.arange(self.M), haplo_ks[i, :, 1]]
+            haplos = np.stack((haploM, haploP), axis = 1)
+            # shuffles haplotypes around
+            haplos = haplos[:,np.random.choice(self.P, size=self.P, replace=False)]
+            H[i,:,:] = haplos
+            # stores parental information
+            parents[i,:] = [iM, iP]
 
         if replace:
-            self._update_obj(H=H, K=K)
+            self._update_obj(H=H)
         else:
-            return (H, K)
+            return H
 
     #######################
     #### Visualization ####
