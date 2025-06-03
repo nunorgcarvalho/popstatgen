@@ -30,6 +30,7 @@ class Population:
         self.M = M
         self.P = P
         self.T_breaks = [0]
+        self.traits = {}
         # stores variants' positions
         self.BPs = np.arange(M)
         # sets seed if specified
@@ -71,35 +72,6 @@ class Population:
         else:
             return np.full(self.M, np.nan)
     
-    @staticmethod
-    def generate_LD_blocks(M: int, N_blocks: int = None,
-                           hotspot_lambda: float = None, block_R: float = None):
-        '''
-        Generates an array of recombination rates that produces LD blocks when simulated. Base recombination rate is kept low, with a few recombination hotspots scattered throughout with much higher recombination rates. Hotspot recombination rates are drawn from an exponential distribution.
-
-        Parameters:
-            M (int): Number of variants
-            N_blocks (int): Number of LD blocks. If not specified, defaults to whichever is higher between 2 and M // 10 (i.e. LD block every 10 variants on average). If 0 or 1, no recombination hotspots are formed.
-            hotspot_lambda (float): Lambda parameter for exponential distribution for which hotspot recombination rates are drawn from. The mean recombination rate is 1/hotspot_lambda, and the variance is 1/hotspot_lambda^2. If not specified, defaults to M, meaning that ~1 crossover event is expected per genome per generation.
-            block_R (float): Recombination rate for non-hotspot variants. If not specified, defaults to 1 / (100*M).
-        Returns:
-            R [1D array] Array of length M specifying recombination rates.
-        '''
-        if N_blocks is None:
-            N_blocks = np.max([2, M // 10])
-        N_hotspots = N_blocks - 1
-        if block_R is None:
-            block_R = (1 / M) / 100
-        if hotspot_lambda is None:
-            hotspot_lambda = M
-        
-        R = np.full(M, block_R)
-        if N_blocks > 1:
-            j_hotspots = np.random.choice(M, size=N_hotspots, replace=False)
-            R[j_hotspots] = np.random.exponential(scale = 1 / hotspot_lambda, size = N_hotspots)
-        return R
-
-
     ###################################
     #### Setting object attributes ####
     ###################################
@@ -388,7 +360,44 @@ class Population:
             self.LD_matrix = LD_matrix
         else:
             return LD_matrix
+
+    def add_trait(self, name: str, seed: int = None, **kwargs):
+        '''
+        Initializes and generates trait.
+
+        Parameters:
+            name (str): Name of trait.
+            seed (int): Seed for random number generation.
+            **kwargs: All other arguments are passed to the Trait constructor. See Trait.__init__ for details.
+        '''
+        if seed is not None:
+            np.random.seed(seed)
+        self.traits[name] = Trait(self.X, **kwargs)
+        # stores actual heritability value
+        self.traits[name].h2_true = self.traits[name].get_h2_true()
     
+    def update_traits(self, fixed_h2: bool = False, traits: list = None):
+        '''
+        Updates all traits by generating based on the current genotype matrix. Random noise components are re-generated. Causal genetic effects remain fixed.
+
+        Parameters:
+            fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Default is False.
+            traits (list of str): List of trait names to update. If None, updates all traits in the object.
+        '''
+        if traits is None:
+            traits = self.traits.keys()
+        # loops through each trait
+        for key in self.traits:
+            if key not in traits:
+                continue
+            trait = self.traits[key]
+            trait.generate_trait(self.X)
+            # recomputes non-noise component to get needed var_Eps to maintain heritability
+            if fixed_h2:
+                var_nonEps = (trait.y - trait.noise_value).var()
+                trait.var['Eps'] = (var_nonEps / trait.h2_true) - var_nonEps
+                trait.generate_trait(self.X)
+
     #######################################
     #### Analysis of object attributes ####
     #######################################
@@ -699,3 +708,138 @@ class Population:
         plt.xlabel('Variant Index')
         plt.ylabel('Variant Index')
         plt.show()
+
+    ########################
+    #### Static Methods ####
+    ########################
+
+    @staticmethod
+    def generate_LD_blocks(M: int, N_blocks: int = None,
+                           hotspot_lambda: float = None, block_R: float = None):
+        '''
+        Generates an array of recombination rates that produces LD blocks when simulated. Base recombination rate is kept low, with a few recombination hotspots scattered throughout with much higher recombination rates. Hotspot recombination rates are drawn from an exponential distribution.
+
+        Parameters:
+            M (int): Number of variants
+            N_blocks (int): Number of LD blocks. If not specified, defaults to whichever is higher between 2 and M // 10 (i.e. LD block every 10 variants on average). If 0 or 1, no recombination hotspots are formed.
+            hotspot_lambda (float): Lambda parameter for exponential distribution for which hotspot recombination rates are drawn from. The mean recombination rate is 1/hotspot_lambda, and the variance is 1/hotspot_lambda^2. If not specified, defaults to M, meaning that ~1 crossover event is expected per genome per generation.
+            block_R (float): Recombination rate for non-hotspot variants. If not specified, defaults to 1 / (100*M).
+        Returns:
+            R [1D array] Array of length M specifying recombination rates.
+        '''
+        if N_blocks is None:
+            N_blocks = np.max([2, M // 10])
+        N_hotspots = N_blocks - 1
+        if block_R is None:
+            block_R = (1 / M) / 100
+        if hotspot_lambda is None:
+            hotspot_lambda = M
+        
+        R = np.full(M, block_R)
+        if N_blocks > 1:
+            j_hotspots = np.random.choice(M, size=N_hotspots, replace=False)
+            R[j_hotspots] = np.random.exponential(scale = 1 / hotspot_lambda, size = N_hotspots)
+        return R
+    
+class Trait:
+    '''
+    Class for a trait belonging to a Population object.
+    '''
+
+    def __init__(self, X: np.ndarray, M_causal: int = None,
+                 var_G: float = 1.0, var_Eps: float = 0.0):
+        '''
+        Initializes and generates trait.
+
+        Parameters:
+            X (2D array): N*M standardized genotype matrix
+            M_causal (int): Number of causal variants (variants with non-zero effect sizes). Default is all variants.
+            var_G (float): Total expected variance contributed by per-standardized-allele genetic effects. Default is 1.0.
+            var_Eps (float): Total expected variance contributed by random noise.
+        '''
+        # stores trait properties
+        self.M = X.shape[1]
+        self.var = {}
+        self.var['G'] = var_G
+        self.var['Eps'] = var_Eps
+        # computes causal effects
+        self.effects, self.j_causal = self.generate_causal_effects(self.M, M_causal, self.var['G'])
+        self.M_causal = len(self.j_causal)
+        # computes trait 
+        self.generate_trait(X)
+
+    @staticmethod
+    def generate_causal_effects(M: int, M_causal: int = None, var_G: float = 1.0):
+        '''
+        Generates variant effect sizes for some trait. Default interpretation is per-standardized-allele effect sizes. Non-causal variant effects are set to 0. Causal effects are drawn from normal distribution with mu=0 and sd=`var_G`/`M_causal`.
+
+        Parameters:
+            M (int): Total number of variants (causal and non-causal).
+            M_causal (int): Number of causal variants (variants with non-zero effect sizes). Default is all variants
+            var_G (float): Total expected variance contributed by per-standardized-allele genetic effects. Default is 1.0.
+        Returns:
+            causal_effects (1D array): Array of length M containing the effect sizes of all variants.
+            j_causal (1D array): Array of length M_causal containing the variant indices of causal variants.
+        '''
+        if M_causal is None:
+            M_causal = M
+        causal_effects = np.zeros(M)
+        j_causal = np.random.choice(M, M_causal, replace=False) 
+        causal_effects[j_causal] = np.random.normal(0, np.sqrt(var_G/M_causal), M_causal)
+        return causal_effects, j_causal
+    
+    @staticmethod
+    def compute_genetic_value(X: np.ndarray, effects: np.ndarray):
+        '''
+        Computes the genetic value/score given a (standardized) genotype matrix and (per-standardized-allele) effect sizes.
+
+        Parameters:
+            X (2D array): N*M genotype matrix. Assumed to be standardized genotypes.
+            effects (1D array): Array of length M containing causal and non-causal genetic effects.
+        Returns:
+            y (1D array): Array of length N containing trait values.
+        '''
+        # dot product
+        y = X @ effects
+        return y
+    
+    @staticmethod
+    def generate_noise_value(N: int, var_Eps: float = 0.0):
+        '''
+        Generates noise component of trait drawn randomly from Normal distribution.
+
+        Parameters:
+            N (int): Number of individuals to generate noise component for.
+            var_Eps (float): Variance of the noise component. Default is 0.
+        Returns:
+            noise_value (1D array): Array of length N containing noise component values.
+        '''
+        noise_value = np.random.normal(loc=0, scale=np.sqrt(var_Eps), size = N)
+        return noise_value
+
+    def generate_trait(self, X: np.ndarray):
+        '''
+        Generates/updates trait using stored genetic effects and recomputing other components. Automatically updates object's attributes, instead of returning trait values.
+
+        Parameters:
+            X (2D array): N*M standardized genotype matrix.
+        '''
+        N = X.shape[0]
+        # genetic component
+        self.genetic_value = self.compute_genetic_value(X, self.effects)
+        # random noise component
+        self.noise_value = self.generate_noise_value(N,self.var['Eps'])
+
+        # computes actual trait as additive of individual components
+        self.y = self.genetic_value + self.noise_value
+
+    def get_h2_true(self):
+        '''
+        Returns the true narrow-sense heritability of the trait, which is variance of the genetic component divided by the variance of the trait.
+        
+        Returns:
+            h2_true (float): True heritability of the trait.
+        '''
+        h2_true = self.genetic_value.var() / self.y.var()
+        return h2_true
+        
