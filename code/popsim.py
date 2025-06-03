@@ -35,7 +35,7 @@ class Population:
         # sets seed if specified
         if seed is not None:
             seed = np.random.seed(seed)
-        # draws initial allele frequencies from uniform distributio between 0.05 and 0.95 if not specified
+        # draws initial allele frequencies from uniform distribution between 0.05 and 0.95 if not specified
         if p_init is None:
             p_init = self._draw_p_init(method = 'uniform', params = (0.05, 0.95))
         elif type(p_init) == float or type(p_init) == int:
@@ -49,6 +49,9 @@ class Population:
 
         # generates initial kinship matrix
         self.K = np.diag(np.full(self.N, 1))
+
+        # generates recombination rates
+        self.R = self.generate_LD_blocks(M)
 
     def _draw_p_init(self, method: str, params: list) -> np.ndarray:
         '''
@@ -68,6 +71,35 @@ class Population:
         else:
             return np.full(self.M, np.nan)
     
+    @staticmethod
+    def generate_LD_blocks(M: int, N_blocks: int = None,
+                           hotspot_lambda: float = None, block_R: float = None):
+        '''
+        Generates an array of recombination rates that produces LD blocks when simulated. Base recombination rate is kept low, with a few recombination hotspots scattered throughout with much higher recombination rates. Hotspot recombination rates are drawn from an exponential distribution.
+
+        Parameters:
+            M (int): Number of variants
+            N_blocks (int): Number of LD blocks. If not specified, defaults to whichever is higher between 2 and M // 10 (i.e. LD block every 10 variants on average). If 0 or 1, no recombination hotspots are formed.
+            hotspot_lambda (float): Lambda parameter for exponential distribution for which hotspot recombination rates are drawn from. The mean recombination rate is 1/hotspot_lambda, and the variance is 1/hotspot_lambda^2. If not specified, defaults to M, meaning that ~1 crossover event is expected per genome per generation.
+            block_R (float): Recombination rate for non-hotspot variants. If not specified, defaults to 1 / (100*M).
+        Returns:
+            R [1D array] Array of length M specifying recombination rates.
+        '''
+        if N_blocks is None:
+            N_blocks = np.max([2, M // 10])
+        N_hotspots = N_blocks - 1
+        if block_R is None:
+            block_R = (1 / M) / 100
+        if hotspot_lambda is None:
+            hotspot_lambda = M
+        
+        R = np.full(M, block_R)
+        if N_blocks > 1:
+            j_hotspots = np.random.choice(M, size=N_hotspots, replace=False)
+            R[j_hotspots] = np.random.exponential(scale = 1 / hotspot_lambda, size = N_hotspots)
+        return R
+
+
     ###################################
     #### Setting object attributes ####
     ###################################
@@ -206,7 +238,6 @@ class Population:
             self.X = X
         else:
             return X
-
     
     def get_GRM(self, G: np.ndarray = None, p: np.ndarray = None, P: int = None) -> np.ndarray:
         '''
@@ -449,14 +480,13 @@ class Population:
                              mu: float = 0, s: Union[float, np.ndarray] = 0, R: Union[float, np.ndarray] = None,
                              record_history: bool = True):
         '''
-        Simulates specified number of generations beyond current generation. Can simulate offspring directly. Automatically updates object.
+        Simulates specified number of generations beyond current generation. Can simulate offspring directly. Automatically updates object. Recombination rates are extracted from object attributes.
 
         Parameters:
             generations (int): Number of generations to simulate (beyond the current generation).
             related_offspring (bool): Whether the offspring of the next generation should be directly related to parents from previous generation by simulating meiosis and haplotype transfer. Default is False, meaning that future offspring have haplotypes drawn randomly from allele frequencies.
             mu (float): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
             s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
-            R (float or 1D array): Recombination rate, such that at a specific locus, there is a probability of R of switching which allele is inherited from a parent. Default is 1/M.
             record_history (bool): Determines if allele frequencies at each generation are saved to a matrix belonging to the object. Default is True.
         '''
         # keeps track of allele frequencies over generations if specified
@@ -469,7 +499,7 @@ class Population:
         # loops through each generation
         for t in range(generations):
             if related_offspring:
-                self.generate_offspring(R=R)
+                self.generate_offspring()
             else:
                 self.next_generation(mu=mu, s=s)
             # records allele frequency
@@ -501,28 +531,20 @@ class Population:
 
         return (iMs, iPs)
 
-    def generate_offspring(self, replace: bool = True, R: Union[float, np.ndarray] = None):
+    def generate_offspring(self, replace: bool = True):
         '''
-        Pairs up mates and generates offspring for parents' haplotypes. Only works for diploids. Each pair always has two offspring.
+        Pairs up mates and generates offspring for parents' haplotypes. Only works for diploids. Each pair always has two offspring. Recombination rates are extracted from object attributes.
 
         Parameters:
             replace (bool): Whether the offspring replace the current generation. Default is True.
         
         Returns:
             H (3D array): N*M*P array of offspring haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
-            R (float or 1D array): Recombination rate, such that at a specific locus, there is a probability of R of switching which allele is inherited from a parent. Default is 1/M.
         '''
         # checks ploidy
         if self.P != 2:
             raise Exception('Offspring generation only works for diploids.')
-        
-        # if no recombination rate is given, it is set to 1/M
-        if R is None:
-            R = 1 / self.M
-        # assigns same recombination rate to all variants if only single value specified
-        if type(R) == float:
-            R = np.full(self.M, R)
-        
+                
         # pairs up mates
         iMs, iPs = self._pair_mates()
         iMs = np.concatenate([iMs, iMs])
@@ -532,7 +554,8 @@ class Population:
         N_offspring = self.N
         
         # generates variants for which a crossover event happens for each parent of each offspring
-        crossover_events = np.random.binomial(n=1, p=R.reshape(1, self.M, 1), size=(N_offspring, self.M, 2))
+        crossover_events = np.random.binomial(n=1, p=self.R.reshape(1, self.M, 1),
+                                              size=(N_offspring, self.M, 2))
         # determines the shift in haplotype phase for each parent's haplotype at each variant
         haplo_phase = np.cumsum(crossover_events, axis=1)
         # randomly chooses haplotype to start with for each parent of each offspring
