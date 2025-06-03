@@ -38,39 +38,18 @@ class Population:
             seed = np.random.seed(seed)
         # draws initial allele frequencies from uniform distribution between 0.05 and 0.95 if not specified
         if p_init is None:
-            p_init = self._draw_p_init(method = 'uniform', params = (0.05, 0.95))
+            p_init = self._draw_p_init(M, method = 'uniform', params = (0.05, 0.95))
         elif type(p_init) == float or type(p_init) == int:
             # if only single value is given, all variants have same initial frequency
-            p_init = np.full(self.M, p_init)
+            p_init = np.full(M, p_init)
 
         # generates initial genotypes and records allele frequencies
         H = self._generate_unrelated_haplotypes(p_init)
         self._update_obj(H=H)
         self.ps = np.expand_dims(self.p, axis=0)
 
-        # generates initial kinship matrix
-        self.K = np.diag(np.full(self.N, 1))
-
         # generates recombination rates
         self.R = self.generate_LD_blocks(M)
-
-    def _draw_p_init(self, method: str, params: list) -> np.ndarray:
-        '''
-        Returns array of initial allele frequencies to simulate genotypes from.
-
-        Parameters:
-            method (str): Method of randomly drawing allele frequencies. Options:
-                uniform: 'Draws from uniform distribution with lower and upper bounds specified by `params`.'
-            params (list): Method-specific parameter values.
-        Returns:
-            p_init (1D array): Array of length M containing allele frequencies.
-        '''
-        # uniform sampling is default
-        if method == 'uniform':
-            p_init = np.random.uniform(params[0], params[1], self.M)
-            return p_init
-        else:
-            return np.full(self.M, np.nan)
     
     ###################################
     #### Setting object attributes ####
@@ -376,12 +355,12 @@ class Population:
         # stores actual heritability value
         self.traits[name].h2_true = self.traits[name].get_h2_true()
     
-    def update_traits(self, fixed_h2: bool = False, traits: list = None):
+    def update_traits(self, fixed_h2: bool = True, traits: list = None):
         '''
         Updates all traits by generating based on the current genotype matrix. Random noise components are re-generated. Causal genetic effects remain fixed.
 
         Parameters:
-            fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Default is False.
+            fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Default is True.
             traits (list of str): List of trait names to update. If None, updates all traits in the object.
         '''
         if traits is None:
@@ -391,12 +370,7 @@ class Population:
             if key not in traits:
                 continue
             trait = self.traits[key]
-            trait.generate_trait(self.X)
-            # recomputes non-noise component to get needed var_Eps to maintain heritability
-            if fixed_h2:
-                var_nonEps = (trait.y - trait.noise_value).var()
-                trait.var['Eps'] = (var_nonEps / trait.h2_true) - var_nonEps
-                trait.generate_trait(self.X)
+            trait.generate_trait(self.X, fixed_h2=fixed_h2)
 
     #######################################
     #### Analysis of object attributes ####
@@ -444,7 +418,6 @@ class Population:
         ps_quantile = np.quantile(self.ps, quantiles, axis=1)
         return (ps_mean, ps_quantile)
     
-
     ####################################
     #### Simulating forward in time ####
     ####################################
@@ -741,6 +714,25 @@ class Population:
             R[j_hotspots] = np.random.exponential(scale = 1 / hotspot_lambda, size = N_hotspots)
         return R
     
+    @staticmethod
+    def _draw_p_init(M, method: str, params: list) -> np.ndarray:
+        '''
+        Returns array of initial allele frequencies to simulate genotypes from.
+
+        Parameters:
+            method (str): Method of randomly drawing allele frequencies. Options:
+                uniform: 'Draws from uniform distribution with lower and upper bounds specified by `params`.'
+            params (list): Method-specific parameter values.
+        Returns:
+            p_init (1D array): Array of length M containing allele frequencies.
+        '''
+        # uniform sampling is default
+        if method == 'uniform':
+            p_init = np.random.uniform(params[0], params[1], M)
+            return p_init
+        else:
+            return np.full(M, np.nan)
+
 class Trait:
     '''
     Class for a trait belonging to a Population object.
@@ -762,6 +754,8 @@ class Trait:
         self.var = {}
         self.var['G'] = var_G
         self.var['Eps'] = var_Eps
+        # computes expected heritability
+        self.h2 = var_G / (var_G + var_Eps)
         # computes causal effects
         self.effects, self.j_causal = self.generate_causal_effects(self.M, M_causal, self.var['G'])
         self.M_causal = len(self.j_causal)
@@ -817,21 +811,29 @@ class Trait:
         noise_value = np.random.normal(loc=0, scale=np.sqrt(var_Eps), size = N)
         return noise_value
 
-    def generate_trait(self, X: np.ndarray):
+    def generate_trait(self, X: np.ndarray, fixed_h2: bool = True):
         '''
         Generates/updates trait using stored genetic effects and recomputing other components. Automatically updates object's attributes, instead of returning trait values.
 
         Parameters:
             X (2D array): N*M standardized genotype matrix.
+            fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Default is True.
         '''
         N = X.shape[0]
         # genetic component
         self.genetic_value = self.compute_genetic_value(X, self.effects)
+
+        var_Eps = self.var['Eps']
+        y_nonEps = self.genetic_value
+        # recomputes non-noise component to get needed var_Eps to maintain heritability
+        if fixed_h2:
+            var_Eps = (y_nonEps.var() / self.h2) - y_nonEps.var()
+
         # random noise component
-        self.noise_value = self.generate_noise_value(N,self.var['Eps'])
+        self.noise_value = self.generate_noise_value(N,var_Eps)
 
         # computes actual trait as additive of individual components
-        self.y = self.genetic_value + self.noise_value
+        self.y = y_nonEps + self.noise_value
 
     def get_h2_true(self):
         '''
