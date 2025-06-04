@@ -79,7 +79,7 @@ We can use calculus to solve for the $\bb$ that minimizes this expression by tak
 
 \begin{align*}
     \B{0} &= \frac{\partial}{\partial \bb} [ \by^{\T} \bOmega^{-1} \by + (\bX \bb)^{\T} \bOmega^{-1} (\bX \bb) - 2(\bX \bb)^{\T} \bOmega^{-1} \by ]\\
-    &=  2X^{\T} \bOmega^{-1} \bX \hat{\bbeta} - 2X^{\T} \bOmega^{-1} \by
+    &=  2 \bX^{\T} \bOmega^{-1} \bX \hat{\bbeta} - 2 \bX^{\T} \bOmega^{-1} \by
 \end{align*}
 
 Which yields:
@@ -109,7 +109,7 @@ To get the variance of the $\hat{\bbeta}$ estimate, we only need to focus on the
     &= \bOmega
 \end{align*}
 
-Let's define $bA = (\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1}$, such that $\hat{\bbeta} = \bA \by$. Furthermore, note that since $\bOmega$ is a covariance matrix, it (and its inverse) is symmetric: $\bOmega = \bOmega^{\T}$. The same symmetry property applies to $\bX^{\T} \bOmega^{-1} \bX$. We can then solve:
+Let's define $\bA = (\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1}$, such that $\hat{\bbeta} = \bA \by$. Furthermore, note that since $\bOmega$ is a covariance matrix, it (and its inverse) is symmetric: $\bOmega = \bOmega^{\T}$. The same symmetry property applies to $\bX^{\T} \bOmega^{-1} \bX$. We can then solve:
 
 \begin{align*}
     \Var[ \hat{\bbeta} ] &= \Var[(\bX^{\T} \bOmega^{-1} \bX)^{-1} \bX^{\T} \bOmega^{-1} \by] \\

@@ -1,0 +1,2 @@
+# Omit Jupyter notebooks from Github's language tracker since they are so massive
+*.ipynb -linguist-detectable
