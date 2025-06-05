@@ -1,7 +1,18 @@
+'''
+This file contains classes related to population and statistical genetics.
+The classes present are:
+- Population: Models a population of individuals with genotypes. Attributes store raw and summary data on such individuals, including traits.
+- Trait: Models a trait in a population, including its individual components.
+These classes largely contain wrapper methods that call functions from other files. These wrapper methods extract the necessary attributes from the class object and pass them as arguments to the functions.
+These wrapper methods often just update the class attributes, instead of returning the results.
+'''
+
+# imports
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Tuple, Union
 from scipy import sparse
+import popgen_functions as pop
 
 class Population:
     '''
@@ -39,7 +50,7 @@ class Population:
             seed = np.random.seed(seed)
         # draws initial allele frequencies from uniform distribution between 0.05 and 0.95 if not specified
         if p_init is None:
-            p_init = self._draw_p_init(M, method = 'uniform', params = (0.05, 0.95))
+            p_init = pop.draw_p_init(M, method = 'uniform', params = (0.05, 0.95))
         elif type(p_init) == float or type(p_init) == int:
             # if only single value is given, all variants have same initial frequency
             p_init = np.full(M, p_init)
@@ -50,14 +61,11 @@ class Population:
         self.ps = np.expand_dims(self.p, axis=0)
 
         # generates recombination rates
-        self.R = self.generate_LD_blocks(M)
+        self.R = pop.generate_LD_blocks(M)
     
     ###################################
-    #### Setting object attributes ####
+    #### Storing object attributes ####
     ###################################
-    '''
-    For a lot of these methods, if certain main inputs are not provided, the method will pull the input from its object attributes. Then, it also save the resulting output as an object attribute, instead of returning it as an object.
-    '''
 
     def _update_obj(self, H: np.ndarray = None, K: np.ndarray = None,
                     get_GRM: bool = False, get_corr_matrix: bool = False):
@@ -71,280 +79,43 @@ class Population:
         '''
         if H is not None:
             self.H = H
-            self._get_G()
-            self.get_freq()
-            self.X = self.standardize_G(self.G, self.p, self.P)
+            self.G = pop.make_G(self.H)
+            self.p = pop.compute_freqs(self.G, self.P)
+            self.X = pop.standardize_G(self.G, self.p, self.P, impute=True, std_method='observed')
             if get_GRM:
                 self.GRM = self.get_GRM(self.G, self.p, self.P)
         if K is not None:
             self.K = K
         if get_corr_matrix:
             self.corr_matrix = self.get_corr_matrix()
-
-    def _get_G(self, H: np.ndarray = None) -> np.ndarray:
-        '''
-        Collapses haplotypes into genotypes. If the first parameter is provided, output is stored as an attribute, instead of being returned.
-
-        Parameters:
-            H (3D array): N*M*P array of alleles
-        Returns:
-            G (2D array): N*M array of genotypes. First dimension is individuals, second dimension is variants. Each element is an integer ranging from 0 to P (the ploidy).
-        '''
-        replace = False
-        if H is None:
-            replace = True
-            H = self.H
-        G = H.sum(axis=2)
-        if replace:
-            self.G = G
-        else:
-            return G
-
-    def get_freq(self, G: np.ndarray = None, P: int = None) -> np.ndarray:
-        '''
-        Computes array of allele frequencies for current genotypes. If the first parameter is provided, output is stored as an attribute, instead of being returned.
-
-        Parameters:
-            G (2D array): N*M array of genotypes. First dimension is individuals, second dimension is variants. Each element is an integer ranging from 0 to P (the ploidy).
-            P (int): Ploidy of genotype matrix. If not specified, assumes to be same as object it was called from.
-        Returns:
-            p (1D array): Array of allele frequencies.
-        '''
-        replace = False
-        if G is None:
-            replace = True
-            G = self.G
-        if P is None:
-            P = self.P
-        p = G.mean(axis=0) / P
-
-        if replace:
-            self.p = p
-        else:
-            return p
-        
-    def center_G(self,G: np.ndarray = None, p: np.ndarray = None, P: int = None) -> np.ndarray:
-        '''
-        Centers genotype matrix so that the mean of each column is 0 (or approximately)
-        Parameters:
-            G (2D array): Genotype matrix. If not specified, assumes to be from object it was called from.
-            p (1D array): Array of allele frequencies from which to center genotypes. If not specified, assumes to be from object it was called from.
-            P (int): Ploidy of genotype matrix. If not specified, assumes to be same as object it was called from.
-        Returns:
-            G_centered (2D array): Centered genotype matrix
-        '''
-        if G is None:
-            G = self.G
-            p = self.p
-            P = self.P
-        else:
-            if p is None:
-                p = self.get_freq(G)
-            if P is None:
-                P = self.P
-        G = G - P*p[None,:]
-        return G # now centered, so actually X - mu
-
-    def standardize_G(self, G: np.ndarray, p: np.ndarray = None, P: int = None,
-                      impute: bool = True, std_method: str = 'observed'):
-        '''
-        Standardizes genotype matrix so that each column has mean 0 and standard deviation of 1 (or approximately). If the first parameter is provided, output is stored as an attribute, instead of being returned.
-
-        Parameters:
-            G (2D array): Genotype matrix. If not specified, assumes to be from object it was called from.
-            p (1D array): Array of allele frequencies from which to center genotypes. If not specified, assumes to be from object it was called from.
-            P (int): Ploidy of genotype matrix. If not specified, assumes to be same as object it was called from.
-            impute (bool): If genotype matrix is a masked array, missing values are filled with the mean genotype value. Default is True.
-            std_method (str): Method for calculating genotype standard deviations. If 'observed' (default), then the actual mathematical standard deviation is used. If 'binomial', then the expected standard deviation based on binomial sampling of the allele frequency is used.
-        Returns:
-            X (2D array): Standardized genotype matrix
-        '''
-        replace = False
-        if G is None:
-            replace = True
-            G = self.G
-            p = self.p
-            P = self.P
-        else:
-            if p is None:
-                p = self.get_freq(G)
-            if P is None:
-                P = self.P
-        G = self.center_G(G, p, P)
-        
-        if np.ma.isMaskedArray(G) and impute:
-            G[G.mask] = 0
-            G = G.data
-
-        if std_method == 'binomial':
-            var_G = P * p * (1 - p) 
-        elif std_method == 'observed': # Ensures Var[G] = 1
-            var_G = G.var(axis=0)
-        
-        # replaces monomorph variances with 1 so no divide by 0 error
-        var_G[var_G == 0] = 1
-        
-        X = G / np.sqrt(var_G)[None,:]
-
-        if replace:
-            self.X = X
-        else:
-            return X
     
-    def get_GRM(self, G: np.ndarray = None, p: np.ndarray = None, P: int = None) -> np.ndarray:
+    def store_neighbor_matrix(self, LDwindow: float = None) -> sparse.coo_matrix:
         '''
-        Computes the genetic relationship matrix (GRM). If the first parameter is provided, output is stored as an attribute, instead of being returned.
-
+        Stores boolean sparse matrix of variants (`neighbor_matrix`) within the specified LD window distance (`LDwindow`) based on object's variant positions (currently only supports `BPs`). Calls `make_neighbor_matrix()` from `popgen_functions.py`.
         Parameters:
-            G (2D array): Genotype matrix. If not specified, assumes to be from object it was called from.
-            p (1D array): Array of allele frequencies from which to center genotypes. If not specified, assumes to be from object it was called from.
-            P (int): Ploidy of genotype matrix. If not specified, assumes to be same as object it was called from.
-        Returns:
-            GRM (2D array): An N*N genetic relationship matrix. Each element is the mean covariance of standardized genotypes across all variants.
+            LDwindow (float): Maximum distance between variants to be considered neighbors. In the same units as the positions used. If not provided, defaults to infinite maximum distance.
         '''
-        standardize = True
-        replace = False
-        if G is None:
-            replace = True
-            if hasattr(self, 'X'):
-                X = self.X
-                standardize = False
-            else:
-                G = self.G
-                p = self.p
-                P = self.P
-        else:
-            if p is None:
-                p = self.get_freq(G)
-            if P is None:
-                P = self.P
-        # get standardized genotype matrix (forced to have Var=1 per column)
-        if standardize:
-            X = self.standardize_G(G,p,P, std_method='observed')
-        M = X.shape[1]
-        # computes GRM
-        GRM = (X @ X.T) / M
+        # by default, uses object's base pair positions
+        positions = self.BPs
+        self.neighbor_matrix = pop.make_neighbor_matrix(positions=positions, LDwindow=LDwindow)
 
-        if replace:
-            self.GRM = GRM
-        else:
-            return GRM
-    
-    def get_neighbor_matrix(self, positions: np.ndarray = None, LDwindow: float = None) -> sparse.coo_matrix:
+    def store_LD_matrix(self):
         '''
-        Gets boolean sparse matrix of variants within the specified LD window distance. If the first parameter is provided, output is stored as an attribute, instead of being returned.
-
-        Parameters:
-            positions (array): Array of length M containing physical positions of variants. Positions must already be in ascending order. If not provided, defaults to object's position map.
-            LDwindow (float): Maximum distance between variants to be considered neighbors. In the same units as that provided in `positions`. If not provided, defaults to infinite maximum distance.
-        Returns:
-            neighbor_matrix (sparse 2D matrix (COO)): An M*M scipy sparse matrix with boolean values, where a 1 at (i,j) indicates that variant i and j are within `LDwindow` of each other, and 0 if not. Returned in COO sparse format.
-        '''
-        # Uses object's position map if not provided
-        replace = False
-        if positions is None:
-            replace = True
-            positions = self.BPs
-        if LDwindow is None:
-            LDwindow = positions[-1] - positions[0]
-        # Initialize lists to store row and column indices of non-zero entries
-        rows = []
-        cols = []
-        # Iterate through each position
-        for i in range(len(positions)):
-            # Find indices of positions within LDwindow of positions[i]
-            start_idx = np.searchsorted(positions, positions[i] - LDwindow, side='left')
-            end_idx = np.searchsorted(positions, positions[i] + LDwindow, side='right')
-            # Add the indices to the rows and cols lists
-            for j in range(start_idx, end_idx):
-                rows.append(i)
-                cols.append(j)
-        # Create a sparse matrix in COO format
-        data = np.ones(len(rows), dtype=bool)  # All non-zero entries are True
-        neighbor_matrix = sparse.coo_matrix((data, (rows, cols)),
-                                          shape=(len(positions), len(positions)))
-        if replace:
-            self.neighbor_matrix = neighbor_matrix
-        else:
-            return neighbor_matrix
-    
-    def get_corr_matrix(self, X: np.ndarray = None,
-                        neighbor_matrix: sparse.coo_matrix = None):
-        '''
-        Computes the correlation between neighboring pairs of variants. The square of this matrix is the LD matrix. If the first parameter is provided, output is stored as an attribute, instead of being returned, and inputs are taken from the object.
-
-        Parameters:
-            X (2D array): N*M standardized genotype matrix where for every column, the mean is 0 and the variance is 1. If not provided, defaults to the object's standardized genotype matrix.
-            neighbor_matrix (sparse 2D matrix (COO)): An M*M scipy sparse matrix with boolean values, where True indicates that the correlation between variants i and j is to be computed. If not provided, uses object's (pre-computed) neighbor_matrix attribute.
-        Returns:
-            corr_matrix (sparse 2D matrix (CSR)): M*M correlation matrix between pairs of variants. Returned in CSR sparse format.
-        '''
-        replace = False
-        if X is None:
-            replace = True
-            X = self.X
-            
-        if neighbor_matrix is None:
-            if hasattr(self, 'neighbor_matrix'):
-                neighbor_matrix = self.neighbor_matrix
-            else:
-                raise Exception('Must have pre-computed neighbor_matrix. Use `Population.get_neighbor_matrix()`.')
-        # Lists to store row indices, column indices, and data for the sparse matrix
-        rows = []
-        cols = []
-        data = []
-        # Iterate over non-zero entries in neighbors_mat
-        for i, j in zip(neighbor_matrix.row, neighbor_matrix.col):
-            if i < j:  # Only compute for upper triangle (including diagonal)
-                # Compute the dot product for (i, j)
-                #corr_value = (X[:, i] * X[:, j]).mean()
-                corr_value = X[:, i].dot(X[:, j]) / X.shape[0]
-                # Add (i, j) and (j, i) to the sparse matrix
-                rows.append(i)
-                cols.append(j)
-                data.append(corr_value)
-                if i != j:  # Avoid duplicating the diagonal
-                    rows.append(j)
-                    cols.append(i)
-                    data.append(corr_value)
-        # Add diagonal entries (set to 1)
-        M = X.shape[1]
-        for i in range(M):
-            rows.append(i)
-            cols.append(i)
-            data.append(1.0)
-        # Create the sparse matrix in COO format
-        corr_matrix = sparse.csr_matrix((data, (rows, cols)), shape=(M, M))
-        
-        if replace:
-            self.corr_matrix = corr_matrix
-        else:
-            return corr_matrix
-
-    def get_LD_matrix(self, corr_matrix: sparse.csr_matrix = None):
-        '''
-        Computes LD matrix by just taking the square of a correlation matrix. If the first parameter is provided, output is stored as an attribute, instead of being returned.
+        Stores the correlation matrix (`corr_matrix`) and its square, the LD matrix (`LD_matrix`). Must have pre-computed `neighbor_matrix` attribute (see `store_neighbor_matrix()`).
 
         Parameters:
             corr_matrix (sparse 2D matrix (CSR)): M*M correlation matrix between pairs of variants in CSR format. Can be computed with `get_corr_matrix()`.
         Returns:
             LD_matrix (sparse 2D matrix (CSR)): M*M LD matrix (square of correlation) between pairs of variants in CSR format.
         '''
-        replace = False
-        if corr_matrix is None:
-            replace = True
-            corr_matrix = self.corr_matrix
-        
-        LD_matrix = corr_matrix.multiply(corr_matrix)  # Element-wise square
-        if replace:
-            self.LD_matrix = LD_matrix
-        else:
-            return LD_matrix
+        if not hasattr(self, 'neighbor_matrix'):
+            raise Exception('Must have pre-computed neighbor_matrix. Use `Population.get_neighbor_matrix()`.')
+        self.corr_matrix = pop.compute_corr_matrix(self.X, self.neighbor_matrix)
+        self.LD_matrix = pop.compute_LD_matrix(self.corr_matrix)
 
     def add_trait(self, name: str, seed: int = None, **kwargs):
         '''
         Initializes and generates trait.
-
         Parameters:
             name (str): Name of trait.
             seed (int): Seed for random number generation.
@@ -632,6 +403,7 @@ class Population:
                        ts: np.ndarray = None,
                        aes: dict = {'title': None, 'xlabel': None, 'ylabel': None},
                        aes_line: dict = {'color': None, 'ls': None, 'labels': None},
+                       vlines: np.ndarray = None,
                        legend: bool = True):
         '''
         General function for plotting some metric over time.
@@ -641,6 +413,7 @@ class Population:
             ts (1D array): Array of time points (generations) corresponding to the metric. If not specified, defaults to the range of generations in the metric.
             aes (dict): Dictionary of aesthetic parameters for the plot.
             aes_line (dict): Dictionary of aesthetic parameters for the lines in the plot.
+            vlines (1D array): Array of time points at which to draw vertical lines. Default is None, meaning no vertical lines are drawn.
             legend (bool): Whether to include a legend in the plot for each line. Default is False.
         '''
         if metrics.ndim == 1:
@@ -676,9 +449,10 @@ class Population:
                      color=colors[j],
                      ls=ls[j],
                      label=labels[j])
-        # vertical lines denoting simulation batches
-        for t in self.T_breaks:
-            plt.axvline(t, ls='--', color='black')
+        # vertical lines
+        if vlines is not None:
+            for t in vlines:
+                plt.axvline(t, ls='--', color='black')
         # labels
         if aes['xlabel'] is not None:
             plt.xlabel(aes['xlabel'])
@@ -740,7 +514,7 @@ class Population:
                'xlabel': 'Generation',
                'ylabel': 'Allele Frequency'}
 
-        self.plot_over_time(metrics, ts, aes=aes, aes_line=aes_line, legend=legend)
+        self.plot_over_time(metrics, ts, aes=aes, aes_line=aes_line, vlines = self.T_breaks, legend=legend)
         
     def plot_LD_matrix(self, LD_matrix: sparse.csr_matrix = None,
                       plot_range: Tuple[int, int] = None, type: str = 'LD',
@@ -790,57 +564,9 @@ class Population:
     ########################
 
     @staticmethod
-    def generate_LD_blocks(M: int, N_blocks: int = None,
-                           hotspot_lambda: float = None, block_R: float = None):
-        '''
-        Generates an array of recombination rates that produces LD blocks when simulated. Base recombination rate is kept low, with a few recombination hotspots scattered throughout with much higher recombination rates. Hotspot recombination rates are drawn from an exponential distribution.
-
-        Parameters:
-            M (int): Number of variants
-            N_blocks (int): Number of LD blocks. If not specified, defaults to whichever is higher between 2 and M // 10 (i.e. LD block every 10 variants on average). If 0 or 1, no recombination hotspots are formed.
-            hotspot_lambda (float): Lambda parameter for exponential distribution for which hotspot recombination rates are drawn from. The mean recombination rate is 1/hotspot_lambda, and the variance is 1/hotspot_lambda^2. If not specified, defaults to M, meaning that ~1 crossover event is expected per genome per generation.
-            block_R (float): Recombination rate for non-hotspot variants. If not specified, defaults to 1 / (100*M).
-        Returns:
-            R [1D array] Array of length M specifying recombination rates.
-        '''
-        if N_blocks is None:
-            N_blocks = np.max([2, M // 10])
-        N_hotspots = N_blocks - 1
-        if block_R is None:
-            block_R = (1 / M) / 100
-        if hotspot_lambda is None:
-            hotspot_lambda = M
-        
-        R = np.full(M, block_R)
-        if N_blocks > 1:
-            j_hotspots = np.random.choice(M, size=N_hotspots, replace=False)
-            R[j_hotspots] = np.random.exponential(scale = 1 / hotspot_lambda, size = N_hotspots)
-        return R
-    
-    @staticmethod
-    def _draw_p_init(M, method: str, params: list) -> np.ndarray:
-        '''
-        Returns array of initial allele frequencies to simulate genotypes from.
-
-        Parameters:
-            method (str): Method of randomly drawing allele frequencies. Options:
-                uniform: 'Draws from uniform distribution with lower and upper bounds specified by `params`.'
-            params (list): Method-specific parameter values.
-        Returns:
-            p_init (1D array): Array of length M containing allele frequencies.
-        '''
-        # uniform sampling is default
-        if method == 'uniform':
-            p_init = np.random.uniform(params[0], params[1], M)
-            return p_init
-        else:
-            return np.full(M, np.nan)
-
-    @staticmethod
     def _get_default_colors(n_lines):
         '''
         Returns a list of colors for plotting lines, cycling through matplotlib's default color cycle.
-
         Parameters:
             n_lines (int): Number of lines to generate colors for.
         Returns:
