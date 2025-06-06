@@ -11,6 +11,7 @@ These wrapper methods often just update the class attributes, instead of returni
 # package imports
 from . import core_functions as core
 from . import popgen_functions as pop
+from . import statgen_functions as stat
 # other imports
 import numpy as np
 import matplotlib.pyplot as plt
@@ -294,7 +295,7 @@ class Population:
                 if AM_type == 'phenotypic':
                     AM_values = self.traits[AM_trait].y
                 elif AM_type == 'genetic':
-                    AM_values = self.traits[AM_trait].genetic_value
+                    AM_values = self.traits[AM_trait].y_G
             # standardizes
             AM_values = (AM_values - AM_values.mean()) / AM_values.std()
         else:
@@ -487,7 +488,6 @@ class Trait:
                  var_G: float = 1.0, var_Eps: float = 0.0):
         '''
         Initializes and generates trait.
-
         Parameters:
             G (2D array): N*M NON-standardized genotype matrix.
             M_causal (int): Number of causal variants (variants with non-zero effect sizes). Default is all variants.
@@ -502,92 +502,41 @@ class Trait:
         # computes expected heritability
         self.h2 = var_G / (var_G + var_Eps)
         # computes causal effects
-        self.effects, self.j_causal = self.generate_causal_effects(self.M, M_causal, self.var['G'])
+        self.effects, self.j_causal = stat.generate_causal_effects(self.M, M_causal, self.var['G'])
         self.effects_per_allele = self.effects / G.std(axis=0) 
         self.M_causal = len(self.j_causal)
         # computes trait 
         self.generate_trait(G)
 
-    @staticmethod
-    def generate_causal_effects(M: int, M_causal: int = None, var_G: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
-        '''
-        Generates variant effect sizes for some trait. Default interpretation is per-standardized-allele effect sizes. Non-causal variant effects are set to 0. Causal effects are drawn from normal distribution with mu=0 and sd=`var_G`/`M_causal`.
-
-        Parameters:
-            M (int): Total number of variants (causal and non-causal).
-            M_causal (int): Number of causal variants (variants with non-zero effect sizes). Default is all variants
-            var_G (float): Total expected variance contributed by per-standardized-allele genetic effects. Default is 1.0.
-        Returns:
-            causal_effects (1D array): Array of length M containing the effect sizes of all variants.
-            j_causal (1D array): Array of length M_causal containing the variant indices of causal variants.
-        '''
-        if M_causal is None:
-            M_causal = M
-        causal_effects = np.zeros(M)
-        j_causal = np.random.choice(M, M_causal, replace=False) 
-        causal_effects[j_causal] = np.random.normal(0, np.sqrt(var_G/M_causal), M_causal)
-        return causal_effects, j_causal
-    
-    @staticmethod
-    def compute_genetic_value(G: np.ndarray, effects: np.ndarray) -> np.ndarray:
-        '''
-        Computes the genetic value/score given a (standardized) genotype matrix and (per-standardized-allele) effect sizes.
-
-        Parameters:
-            G (2D array): N*M NON-standardized genotype matrix.
-            effects (1D array): Array of length M containing causal and non-causal genetic effects.
-        Returns:
-            y (1D array): Array of length N containing trait values.
-        '''
-        # dot product
-        y = G @ effects
-        return y
-    
-    @staticmethod
-    def generate_noise_value(N: int, var_Eps: float = 0.0) -> np.ndarray:
-        '''
-        Generates noise component of trait drawn randomly from Normal distribution.
-
-        Parameters:
-            N (int): Number of individuals to generate noise component for.
-            var_Eps (float): Variance of the noise component. Default is 0.
-        Returns:
-            noise_value (1D array): Array of length N containing noise component values.
-        '''
-        noise_value = np.random.normal(loc=0, scale=np.sqrt(var_Eps), size = N)
-        return noise_value
-
     def generate_trait(self, G: np.ndarray, fixed_h2: bool = True):
         '''
         Generates/updates trait using stored genetic effects and recomputing other components. Automatically updates object's attributes, instead of returning trait values.
-
         Parameters:
             G (2D array): N*M NON-standardized genotype matrix.
             fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Genetic component must be non-zero. Default is True.
         '''
         N = G.shape[0]
         # genetic component (using per-allele effects)
-        self.genetic_value = self.compute_genetic_value(G, self.effects_per_allele)
+        self.y_G = stat.compute_genetic_value(G, self.effects_per_allele)
 
         var_Eps = self.var['Eps']
-        y_nonEps = self.genetic_value
+        y_nonEps = self.y_G
         # recomputes non-noise component to get needed var_Eps to maintain heritability
         if fixed_h2:
             var_Eps = (y_nonEps.var() / self.h2) - y_nonEps.var()
 
         # random noise component
-        self.noise_value = self.generate_noise_value(N,var_Eps)
+        self.y_Eps = stat.generate_noise_value(N,var_Eps)
 
         # computes actual trait as additive of individual components
-        self.y = y_nonEps + self.noise_value
+        self.y = y_nonEps + self.y_Eps
 
     def get_h2_true(self) -> float:
         '''
         Returns the true narrow-sense heritability of the trait, which is variance of the genetic component divided by the variance of the trait.
-        
         Returns:
             h2_true (float): True heritability of the trait.
         '''
-        h2_true = self.genetic_value.var() / self.y.var()
+        h2_true = self.y_G.var() / self.y.var()
         return h2_true
         
