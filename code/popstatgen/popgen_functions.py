@@ -7,7 +7,6 @@ The functions here contain the documentation for the arguments and return values
 
 # imports
 import numpy as np
-from typing import Tuple, Union
 from scipy import sparse
 
 ################################################
@@ -21,7 +20,7 @@ def make_G(H: np.ndarray) -> np.ndarray:
     Returns:
         G (2D array): N*M array of genotypes. First dimension is individuals, second dimension is variants. Each element is an integer ranging from 0 to P (the ploidy).
     '''
-    G = H.sum(axis=2)
+    G = H.sum(axis=2).astype(np.uint8)
     return G
 
 def compute_freqs(G: np.ndarray, P: int) -> np.ndarray:
@@ -31,7 +30,7 @@ def compute_freqs(G: np.ndarray, P: int) -> np.ndarray:
         G (2D array): N*M matrix of genotypes. First dimension is individuals, second dimension is variants. Each element is an integer ranging from 0 to P (the ploidy).
         P (int): Ploidy of genotype matrix.
     Returns:
-        p (1D array): Array of allele frequencies.
+        p (1D array): Array of length M containing allele frequencies.
     '''
     p = G.mean(axis=0) / P
     return p
@@ -170,6 +169,25 @@ def compute_LD_matrix(corr_matrix):
         '''
         LD_matrix = corr_matrix.multiply(corr_matrix)  # Element-wise square
         return LD_matrix
+
+#############################
+#### Forward simulations ####
+#############################
+
+def draw_binom_haplos(p: np.ndarray, N: int, P: int = 2) -> np.ndarray:
+    '''
+    Generates 3-dimensional matrix of population haplotypes.
+    Parameters:
+        p (1D array): Array of length M containing allele frequencies from which haplotypes are drawn.
+        N (int): Number of individuals in the population.
+        P (int): Ploidy of the population. Default is 2 (diploid).
+    Returns:
+        H (3D array): N*M*P array of alleles. First dimension is individuals, second dimension is variants, third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
+    '''
+    M = p.shape[0]
+    p = p.reshape(1, M, 1)
+    H = np.random.binomial( 1, p = p, size = (N, M, P)).astype(np.uint8)
+    return H
 
 ########################################
 #### Simulating realistic genotypes ####

@@ -7,6 +7,24 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 #######################
+#### Miscellaneous ####
+#######################
+
+def corr(x,y):
+    '''
+    Computes Pearson correlation coefficient between two vectors x and y.
+    Parameters:
+        x (1D array): First vector.
+        y (1D array): Second vector.
+    Returns:
+        r (float): Pearson correlation coefficient between x and y.
+    '''
+    x_norm = (x - x.mean()) / np.sqrt(np.var(x))
+    y_norm = (y - y.mean()) / np.sqrt(np.var(y))
+    r = (x_norm * y_norm).mean()
+    return r
+
+#######################
 #### Visualization ####
 #######################
 def _get_default_colors(n_lines):

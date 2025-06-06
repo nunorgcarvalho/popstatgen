@@ -59,7 +59,7 @@ class Population:
             p_init = np.full(M, p_init)
 
         # generates initial genotypes and records allele frequencies
-        H = self._generate_unrelated_haplotypes(p_init)
+        H = pop.draw_binom_haplos(p_init, self.N, self.P)
         self._update_obj(H=H)
         self.ps = np.expand_dims(self.p, axis=0)
 
@@ -204,19 +204,6 @@ class Population:
     ####################################
     #### Simulating forward in time ####
     ####################################
-
-    def _generate_unrelated_haplotypes(self, p: np.ndarray) -> np.ndarray:
-        '''
-        Generates 3-dimensional matrix of population haplotypes.
-
-        Parameters:
-            p (1D array): Array of allele frequencies to draw alleles from.
-        Returns:
-            H (3D array): N*M*P array of alleles. First dimension is individuals, second dimension is variants, third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
-        '''
-        p = p.reshape(1, self.M, 1)
-        H = np.random.binomial( 1, p = p, size = (self.N, self.M, self.P))
-        return H
         
     def next_generation(self, s: Union[float, np.ndarray] = 0.0,
                         mu: Union[float, np.ndarray] = 0.0):
@@ -239,7 +226,7 @@ class Population:
         # effect of mutation (in gametes that lead to new generation, i.e. post-selection)
         p = p*(1-mu) + (1-p)*mu
         # effect of genetic drift
-        H = self._generate_unrelated_haplotypes(p)
+        H = pop.draw_binom_haplos(p, self.N, self.P)
 
         self.t = self.t + 1
         self._update_obj(H=H)
@@ -281,7 +268,6 @@ class Population:
                     AM_type: str = 'phenotypic') -> np.ndarray:
         '''
         Pairs individuals up monogamously to mate and generate offspring. Population size must be multiple of 2. Allows for assortative mating (AM) if specified.
-
         Parameters:
             AM_r (float): Desired correlation between AM trait values of spouses. Default is 0 (no assortative mating).
             AM_trait (str or 1D array): If a string, the name of the trait to use for assortative mating (as stored in the object). If an array, the trait values to use for assortative mating. If None, no assortative mating is performed. Default is None.
