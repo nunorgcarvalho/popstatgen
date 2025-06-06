@@ -17,6 +17,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Tuple, Union
 from scipy import sparse
+import copy
 
 class Population:
     '''
@@ -29,29 +30,36 @@ class Population:
 
     def __init__(self, N: int, M: int, P: int = 2,
                  p_init: Union[float, np.ndarray] = None,
+                 keep_past_generations: int = 1,
                  seed: int = None):
         '''
         Initializes a population, simulating initial genotypes.
-
         Parameters:
             N (int): {opulation size of individuals (not haplotypes).
             M (int): Total number of variants in genome.
             P (int): ploidy of genotpes. Default is 2 (diploid).
             p_init (float or array): Initial allele frequency of variants. If only a single value is provided, it is treated as the initial allele frequency for all variants. Otherwise, must be an array of length M. Default is uniform distribution between 0.05 and 0.95.
+            keep_past_generations (int): Number of past generations to keep in the object. Default is 1, meaning the past generation is kept (on top of the current generation).
             seed (int): Initial seed to use when simulating genotypes (and allele frequencies if necessary).
         '''
-        # defines properties of instance
-        self.N = N
-        self.M = M
-        self.P = P
-        self.t = 0 # generation
-        self.T_breaks = [self.t]
-        self.traits = {}
-        # stores variants' positions
-        self.BPs = np.arange(M)
         # sets seed if specified
         if seed is not None:
             seed = np.random.seed(seed)
+        # Initializing properties of instance
+        self.N = N # population size
+        self.M = M # number of variants
+        self.P = P # ploidy
+        self.t = 0 # generation
+        self.T_breaks = [self.t] # simulation breaks
+        self.traits = {}
+        self.BPs = np.arange(M) # variant positions in base pairs (BPs)
+        self.R = pop.generate_LD_blocks(M) # recombination rates
+        self.K = np.diag(np.ones(N)) # kinship matrix (initially identity)
+        self.keep_past_generations = keep_past_generations # how many past generations to keep in memory
+        self.past = [self]
+        for _ in range(keep_past_generations):
+            self.past.append(None) # initializes past generations' objects as None
+
         # draws initial allele frequencies from uniform distribution between 0.05 and 0.95 if not specified
         if p_init is None:
             p_init = pop.draw_p_init(M, method = 'uniform', params = (0.05, 0.95))
@@ -61,37 +69,42 @@ class Population:
 
         # generates initial genotypes and records allele frequencies
         H = pop.draw_binom_haplos(p_init, self.N, self.P)
-        self._update_obj(H=H)
+        self._update_obj(H=H, update_past=False)
         self.ps = np.expand_dims(self.p, axis=0)
-
-        # generates recombination rates
-        self.R = pop.generate_LD_blocks(M)
     
     ###################################
     #### Storing object attributes ####
     ###################################
 
-    def _update_obj(self, H: np.ndarray = None, K: np.ndarray = None,
-                    get_GRM: bool = False, get_corr_matrix: bool = False):
+    def _update_obj(self, H: np.ndarray = None, update_past: bool = True):
         '''
         Update the population object's attributes.
-
         Parameters:
             H (3D array): Haplotype array.
-            K (2D array): Kinship array.
-            GRM (bool): Whether the GRM should computed from the genotype matrix. Default is false.
+            update_past (bool): Whether to update the memory of past generations. Default is True.
         '''
+        if update_past:
+            self._update_past()
         if H is not None:
             self.H = H
             self.G = pop.make_G(self.H)
             self.p = pop.compute_freqs(self.G, self.P)
             self.X = pop.standardize_G(self.G, self.p, self.P, impute=True, std_method='observed')
-            if get_GRM:
-                self.GRM = self.get_GRM(self.G, self.p, self.P)
-        if K is not None:
-            self.K = K
-        if get_corr_matrix:
-            self.corr_matrix = self.get_corr_matrix()
+        
+    def _update_past(self):
+        '''
+        Updates the past generations' objects, shifting them by one and adding the current object as the first element.
+        '''
+        if self.keep_past_generations > 0:
+            # makes copy of current object
+            gen_t1 = copy.deepcopy(self)
+            # removes unnecessary attributes (e.g. past generations)
+            gen_t1.past = None
+            # shifts previous generations
+            self.past[2:] = self.past[1:self.keep_past_generations]
+            self.past[1] = gen_t1
+            self.past[0] = self
+        self.t += 1
     
     def store_neighbor_matrix(self, LDwindow: float = None) -> sparse.coo_matrix:
         '''
@@ -207,13 +220,15 @@ class Population:
     ####################################
         
     def next_generation(self, s: Union[float, np.ndarray] = 0.0,
-                        mu: Union[float, np.ndarray] = 0.0):
+                        mu: Union[float, np.ndarray] = 0.0) -> np.ndarray:
         '''
         Simulates new generation. Doesn't simulate offspring directly, meaning that future offspring have haplotypes drawn randomly from allele frequencies. Automatically updates object.
 
         Parameters:
             s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
             mu (float or 1D array): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
+        Returns:
+            H (3D array): N*M*P array of next generation's haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
         '''
         # assigns same selection coefficient/mutation rate to all variants if only single value specified
         if isinstance(s, (float, int)):
@@ -229,8 +244,7 @@ class Population:
         # effect of genetic drift
         H = pop.draw_binom_haplos(p, self.N, self.P)
 
-        self.t = self.t + 1
-        self._update_obj(H=H)
+        return H
 
     def simulate_generations(self, generations: int, related_offspring: bool = False,
                              trait_updates: bool = False, fixed_h2: bool = False,
@@ -252,9 +266,11 @@ class Population:
         # loops through each generation
         for t in range(generations):
             if related_offspring:
-                self.generate_offspring(**kwargs)
+                H = self.generate_offspring(**kwargs)
             else:
-                self.next_generation(**kwargs)
+                H = self.next_generation(**kwargs)
+            # updates objects and past
+            self._update_obj(H=H)
             # records metrics
             ps[previous_gens + t,] = self.p
             if trait_updates:
@@ -316,15 +332,13 @@ class Population:
 
     def generate_offspring(self, s: Union[float, np.ndarray] = 0,
                            mu: Union[float, np.ndarray] = 0,
-                           **kwargs):
+                           **kwargs) -> np.ndarray:
         '''
         Pairs up mates and generates offspring for parents' haplotypes. Only works for diploids. Each pair always has two offspring. Recombination rates are extracted from object attributes.
-
         Parameters:
             s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
             mu (float or 1D array): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
             **kwargs: All other arguments (related to assortative mating) are passed to the `_pair_mates` method. See that method for details.
-        
         Returns:
             H (3D array): N*M*P array of offspring haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
         '''
@@ -381,8 +395,7 @@ class Population:
         # Apply mutations by flipping alleles (0 to 1 or 1 to 0) based on the mutation matrix
         H = (H + mutations) % 2
 
-        self.t = self.t + 1
-        self._update_obj(H=H)
+        return H
 
     #######################
     #### Visualization ####
