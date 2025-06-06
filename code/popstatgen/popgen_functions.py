@@ -7,7 +7,6 @@ The functions here contain the documentation for the arguments and return values
 
 # imports
 import numpy as np
-import matplotlib.pyplot as plt
 from typing import Tuple, Union
 from scipy import sparse
 

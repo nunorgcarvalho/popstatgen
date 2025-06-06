@@ -7,12 +7,15 @@ These classes largely contain wrapper methods that call functions from other fil
 These wrapper methods often just update the class attributes, instead of returning the results.
 '''
 
-# imports
+# imports ####
+# package imports
+from . import core_functions as core
+from . import popgen_functions as pop
+# other imports
 import numpy as np
 import matplotlib.pyplot as plt
 from typing import Tuple, Union
 from scipy import sparse
-from . import popgen_functions as pop
 
 class Population:
     '''
@@ -398,83 +401,12 @@ class Population:
     #### Visualization ####
     #######################
 
-    def plot_over_time(self,
-                       metrics: np.ndarray,
-                       ts: np.ndarray = None,
-                       aes: dict = {'title': None, 'xlabel': None, 'ylabel': None},
-                       aes_line: dict = {'color': None, 'ls': None, 'labels': None},
-                       vlines: np.ndarray = None,
-                       legend: bool = True):
-        '''
-        General function for plotting some metric over time.
-
-        Parameters:
-            metric (1D or 2D array): Metric(s) to plot over time. If a T*K 2D matrix, each column is treated as a different line to plot.
-            ts (1D array): Array of time points (generations) corresponding to the metric. If not specified, defaults to the range of generations in the metric.
-            aes (dict): Dictionary of aesthetic parameters for the plot.
-            aes_line (dict): Dictionary of aesthetic parameters for the lines in the plot.
-            vlines (1D array): Array of time points at which to draw vertical lines. Default is None, meaning no vertical lines are drawn.
-            legend (bool): Whether to include a legend in the plot for each line. Default is False.
-        '''
-        if metrics.ndim == 1:
-            metrics = metrics.reshape(-1, 1)
-        K = metrics.shape[1]
-        # fills out aes_line settings
-        # color
-        if aes_line['color'] is None:
-            aes_line['color'] = self._get_default_colors(K)
-        if type(aes_line['color']) == str:
-            aes_line['color'] = [aes_line['color']] * K
-        colors = aes_line['color']
-        # line style
-        if aes_line['ls'] is None:
-            aes_line['ls'] = '-'
-        if type(aes_line['ls']) == str:
-            aes_line['ls'] = [aes_line['ls']] * K
-        ls = aes_line['ls']
-        # labels
-        if aes_line['labels'] is None:
-            aes_line['labels'] = [f'Line {j}' for j in range(K)] # not shown
-            legend=False
-        labels = aes_line['labels']
-
-        if ts is None:
-            ts = np.arange(metrics.shape[0])
-
-        # plotting
-        plt.figure(figsize=(8, 5))
-        # plots lines
-        for j in range(K):
-            plt.plot(ts, metrics[:, j],
-                     color=colors[j],
-                     ls=ls[j],
-                     label=labels[j])
-        # vertical lines
-        if vlines is not None:
-            for t in vlines:
-                plt.axvline(t, ls='--', color='black')
-        # labels
-        if aes['xlabel'] is not None:
-            plt.xlabel(aes['xlabel'])
-        if aes['ylabel'] is not None:
-            plt.ylabel(aes['ylabel'])
-        if aes['title'] is not None:
-            plt.title(aes['title'])
-        plt.xlim(ts.min(), ts.max())
-        plt.ylim(0, 1)
-        if legend:
-            plt.legend()
-        plt.tight_layout()
-        plt.show()
-
-    def plot_freq_over_time(self, ps: np.ndarray = None, j_keep: tuple = None,
+    def plot_freq_over_time(self, j_keep: tuple = None,
                             legend=False, last_generations: int = None,
                             summarize: bool = False, quantiles: tuple = (0.25, 0.5, 0.75)):
         '''
         Plots variant allele frequencies over time.
-
         Parameters:
-            ps (2D array): T*M matrix (where T is number of generations) containing allele frequencies over time. Defaults to object's allele frequency history.
             j_keep (tuple): Variant indices to include when plotting. Defaults to all variants.
             legend (bool): Whether to include a legend in the plot for each line. Default is False.
             last_generations (int): Number specifying the number of most recent generations to plot. Defaults to all generations since beginning.
@@ -484,9 +416,8 @@ class Population:
         # plots all variants if not specified
         if j_keep is None:
             j_keep = tuple( range(self.M) )
-        # uses population's allele frequency history if not specified
-        if ps is None:
-            ps = self.ps
+        # uses population's allele frequency history
+        ps = self.ps
         # plots all generations if not specified
         if last_generations is None:
             t_start = 0
@@ -514,7 +445,7 @@ class Population:
                'xlabel': 'Generation',
                'ylabel': 'Allele Frequency'}
 
-        self.plot_over_time(metrics, ts, aes=aes, aes_line=aes_line, vlines = self.T_breaks, legend=legend)
+        core.plot_over_time(metrics, ts, aes=aes, aes_line=aes_line, vlines = self.T_breaks, legend=legend)
         
     def plot_LD_matrix(self, LD_matrix: sparse.csr_matrix = None,
                       plot_range: Tuple[int, int] = None, type: str = 'LD',
@@ -528,22 +459,24 @@ class Population:
             type (str): Uses color scheme for either 'LD' (default) or 'corr' matrix.
             omit_mono (bool): Whether variants that are monomorphic (p = 0 or 1) should be skipped over when plotting. Default is False.
         '''
-        if LD_matrix is None:
-            if type == 'LD':
-                LD_matrix = self.LD_matrix
-            elif type == 'corr':
-                LD_matrix = self.corr_matrix
+        # chooses between LD and correlation matrix
+        if type == 'LD':
+            LD_matrix = self.LD_matrix
+        elif type == 'corr':
+            LD_matrix = self.corr_matrix
         if plot_range is not None:
             start, stop = plot_range
         else:
             start = 0
             stop = LD_matrix.shape[0]
+
         # Convert the sparse matrix to a dense array
         LD_matrix_dense = LD_matrix[start:stop, start:stop].toarray()
         
         # Skips plotting monomorphic variants
         if omit_mono:
-            j_mono = (self.p == 0) | (self.p == 1)
+            p = self.p[start:stop]
+            j_mono = (p == 0) | (p == 1)
             LD_matrix_dense = np.delete(LD_matrix_dense, j_mono, axis=0)
             LD_matrix_dense = np.delete(LD_matrix_dense, j_mono, axis=1)
 
@@ -558,24 +491,6 @@ class Population:
         plt.xlabel('Variant Index')
         plt.ylabel('Variant Index')
         plt.show()
-
-    ########################
-    #### Static Methods ####
-    ########################
-
-    @staticmethod
-    def _get_default_colors(n_lines):
-        '''
-        Returns a list of colors for plotting lines, cycling through matplotlib's default color cycle.
-        Parameters:
-            n_lines (int): Number of lines to generate colors for.
-        Returns:
-            colors (list): List of colors for plotting lines.
-        '''
-        prop_cycle = plt.rcParams['axes.prop_cycle']
-        colors = [c['color'] for c in prop_cycle]
-        # Repeat colors if n_lines > length of color cycle
-        return [colors[i % len(colors)] for i in range(n_lines)]
 
 class Trait:
     '''
