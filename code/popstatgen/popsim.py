@@ -12,7 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Tuple, Union
 from scipy import sparse
-import popgen_functions as pop
+from . import popgen_functions as pop
 
 class Population:
     '''
