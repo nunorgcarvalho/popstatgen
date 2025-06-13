@@ -33,33 +33,19 @@ class Population:
                  keep_past_generations: int = 1,
                  seed: int = None):
         '''
-        Initializes a population, simulating initial genotypes.
+        Initializes a population, simulating initial genotypes from specified allele frequencies.
         Parameters:
-            N (int): {opulation size of individuals (not haplotypes).
+            N (int): Population size of individuals (not haplotypes).
             M (int): Total number of variants in genome.
-            P (int): ploidy of genotpes. Default is 2 (diploid).
-            p_init (float or array): Initial allele frequency of variants. If only a single value is provided, it is treated as the initial allele frequency for all variants. Otherwise, must be an array of length M. Default is uniform distribution between 0.05 and 0.95.
+            P (int): Ploidy of genotpes. Default is 2 (diploid).
+            p_init (float or array): Initial allele frequency of variants. If only a single value is provided, it is treated as the initial allele frequency for all variants. Alternatively, can be an array of length M for variant-specfic allele frequencies. If not provided, default is uniform distribution of allele frequencies between 0.05 and 0.95.
             keep_past_generations (int): Number of past generations to keep in the object. Default is 1, meaning the past generation is kept (on top of the current generation).
             seed (int): Initial seed to use when simulating genotypes (and allele frequencies if necessary).
         '''
         # sets seed if specified
         if seed is not None:
             seed = np.random.seed(seed)
-        # Initializing properties of instance
-        self.N = N # population size
-        self.M = M # number of variants
-        self.P = P # ploidy
-        self.t = 0 # generation
-        self.T_breaks = [self.t] # simulation breaks
-        self.traits = {}
-        self.BPs = np.arange(M) # variant positions in base pairs (BPs)
-        self.R = pop.generate_LD_blocks(M) # recombination rates
-        self.K = np.diag(np.ones(N)) # kinship matrix (initially identity)
-        self.keep_past_generations = keep_past_generations # how many past generations to keep in memory
-        self.past = [self]
-        for _ in range(keep_past_generations):
-            self.past.append(None) # initializes past generations' objects as None
-
+        
         # draws initial allele frequencies from uniform distribution between 0.05 and 0.95 if not specified
         if p_init is None:
             p_init = pop.draw_p_init(M, method = 'uniform', params = (0.05, 0.95))
@@ -68,10 +54,51 @@ class Population:
             p_init = np.full(M, p_init)
 
         # generates initial genotypes and records allele frequencies
-        H = pop.draw_binom_haplos(p_init, self.N, self.P)
+        H = pop.draw_binom_haplos(p_init, N, P)
+
+        # passes haplotype to base constructor for further initialization
+        self._initialize_H(H, keep_past_generations=keep_past_generations)
+    
+    @classmethod
+    def from_H(cls, H: np.ndarray, keep_past_generations: int = 1):
+        '''
+        Initializes a population from a given haplotype array.
+        Parameters:
+            H (3D array): N*M*P array of haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
+            keep_past_generations (int): Number of past generations to keep in the object. Default is 1, meaning the past generation is kept (on top of the current generation).
+        Returns:
+            Population: A new Population object initialized with the given haplotype array.
+        '''
+        # creates new instance of class
+        instance = cls.__new__(cls)
+        # initializes the object with the given haplotype array
+        instance._initialize_H(H, keep_past_generations=keep_past_generations)
+        return instance
+
+
+    def _initialize_H(self, H: np.ndarray, keep_past_generations: int = 1):
+        '''
+        Initializes a population from a given haplotype array. See the `from_H` class method for details.
+        '''
+        # sets basic population attributes from haplotype array
+        (self.N, self.M, self.P) = H.shape
+
+        # initializes default/initial attributes
+        self.t = 0 # generation
+        self.T_breaks = [self.t] # simulation breaks
+        self.traits = {}
+        self.BPs = np.arange(self.M) # variant positions in base pairs (BPs)
+        self.R = pop.generate_LD_blocks(self.M) # recombination rates
+        self.K = np.diag(np.ones(self.N)) # kinship matrix (initially identity)
+        self.keep_past_generations = keep_past_generations # how many past generations to keep in memory
+        self.past = [self]
+        for _ in range(keep_past_generations):
+            self.past.append(None) # initializes past generations' objects as None
+
+        # further attributes
         self._update_obj(H=H, update_past=False)
         self.ps = np.expand_dims(self.p, axis=0)
-    
+
     ###################################
     #### Storing object attributes ####
     ###################################
@@ -559,16 +586,142 @@ class SuperPopulation:
     Class for a superpopulation, which contains multiple populations. Allows for multiple populations to be simulated forward in time together.
     '''
 
-    def __init__(self, pops: list):
+    #######################
+    #### Intialization ####
+    #######################
+    def __init__(self, pops: Union[Population, list]):
         '''
         Initializes a superpopulation with a list of populations.
         Parameters:
-            pops (list): List of Population objects. Can be of length 1.
+            pops (list): List of Population objects to include in the superpopulation. Can also just be a single Population object.
         '''
+        if isinstance(pops, Population):
+            # if only a single population is passed, convert it to a list
+            pops = [pops]
         self.pops = pops
+        # initializes basic attributes
+        self.era = 0 # starts at 1
+        # creates active vector
         self.active = [True] * len(pops)  # active populations as boolean
-        self.active_i = [i for i, active in enumerate(self.active) if active]  # active indices
+        self._update_era() # initializes active indices and history
+        # creates lineage graph (adjacency matrix) for populations
+        self._expand_graph()
     
+    def _update_era(self):
+        ''' Updates the list of active population indices based on the current state of the `active` attribute, the current era, and the history of active populations (as boolean matrix).'''
+        # gets indices of active populations
+        self.active_i = [i for i, active in enumerate(self.active) if active]  # active indices
+
+        # updates history of active populations (and updates era)
+        self.era += 1        
+        active_history = np.zeros((self.era, len(self.pops)), dtype=bool)
+        if hasattr(self, 'active_history'):
+            active_history[:(self.era-1), :self.active_history.shape[1]] = self.active_history
+        
+        active_history[self.era-1, :] = self.active
+        self.active_history = active_history
+
+    ##################################
+    #### Updating population list ####
+    ##################################
+    def add_population(self, pops: Union[Population, list], active_new: Union[bool, list] = True,
+                       update_era: bool = True):
+        '''
+        Adds one or more new populations to the superpopulation.
+        Parameters:
+            list (Population or list): Population object to add. If a list is passed, it is assumed to be a list of Population objects, all of which are added in the order provided.
+            active_new (bool or list): Whether the new populations should be active. If a single boolean is passed, it applies to all new populations. If a list is passed, it should have the same length as the number of new populations and specifies whether each population is active. Default is True, meaning all new populations are active.
+            update_era (bool): Whether to update the era after inactivating the populations. Default is True.
+        '''
+        if isinstance(pops, Population):
+            # if only a single population is passed, convert it to a list
+            pops = [pops]
+        
+        self.pops.extend(pops)
+        # updates active populations
+        if isinstance(active_new, bool):
+            # if only a single boolean is passed, apply it to all new populations
+            active_new = [active_new] * len(pops)
+        elif len(active_new) != len(pops):
+            raise ValueError("Length of active_new must match the number of new populations.")
+    
+        # updates active status
+        self.active.extend(active_new)
+        if update_era: 
+            self._update_era() # updates era, active indices, and history
+        # updates lineage graph
+        self._expand_graph()
+        
+    def inactivate_population(self, pop_i: Union[int, list], update_era: bool = True):
+        '''
+        Inactivates one or more populations from the superpopulation.
+        Parameters:
+            pop_i (int or list): Index of the population to inactivate. If a list is passed, it is assumed to be a list of indices of populations to inactivate.
+            update_era (bool): Whether to update the era after inactivating the populations. Default is True.
+        '''
+        if isinstance(pop_i, int):
+            pop_i = [pop_i]
+        for i in pop_i:
+            self.active[i] = False
+        if update_era: 
+            self._update_era() # updates era, active indices, and history
+
+    def activate_population(self, pop_i: Union[int, list], update_era: bool = True):
+        '''
+        Activates one or more populations in the superpopulation.
+        Parameters:
+            pop_i (int or list): Index of the population to activate. If a list is passed, it is assumed to be a list of indices of populations to activate.
+            update_era (bool): Whether to update the era after activating the populations. Default is True.
+        '''
+        if isinstance(pop_i, int):
+            pop_i = [pop_i]
+        for i in pop_i:
+            self.active[i] = True
+        if update_era: 
+            self._update_era() # updates era, active indices, and history
+
+    def join_populations(self, pop_i: list):
+        '''
+        Joins multiple populations into a single population. Inactivates the original populations and creates a new population from the merged haplotypes. The new population is added to the superpopulation as an active population.
+        Parameters:
+            pop_i (list): List of indices of populations to join.
+        '''
+        if len(pop_i) < 2:
+            raise ValueError("Must specify at least two populations to join.")
+        
+        # merges haplotypes of specified populations
+        H = np.concatenate([self.pops[i].H for i in pop_i], axis=0)
+        # creates new population from merged haplotypes
+        new_pop = Population.from_H(H, keep_past_generations=0)
+        
+        # updates superpopulation
+        self.add_population(new_pop, active_new=True, update_era=False)
+        self.inactivate_population(pop_i)
+
+        # updates graph
+        for i in pop_i:
+            # updates graph to reflect that the populations are now joined
+            self.graph[i, len(self.pops)-1] = 1
+
+
+    #######################
+    #### Lineage Graph ####
+    #######################
+    def _expand_graph(self):
+        '''
+        Expands lineage graph to match current number of populations. Can also be used to initialize the graph if it doesn't exist yet.
+        '''
+        graph = np.zeros((len(self.pops), len(self.pops)), dtype=int)
+        # updates graph attribute
+        if hasattr(self, 'graph'):
+            if len(self.pops) < len(self.graph):
+                raise ValueError("List of populations has shrunk! This shouldn't happen.")
+            graph[:len(self.graph), :len(self.graph)] = self.graph
+        self.graph = graph
+
+    ####################
+    #### Simulating ####
+    ####################
     def simulate_generations(self, **kwargs):
         '''
         Simulates generations for all active populations in the superpopulation. 
