@@ -552,4 +552,44 @@ class Trait:
         '''
         h2_true = self.y_G.var() / self.y.var()
         return h2_true
-        
+
+
+class SuperPopulation:
+    '''
+    Class for a superpopulation, which contains multiple populations. Allows for multiple populations to be simulated forward in time together.
+    '''
+
+    def __init__(self, pops: list):
+        '''
+        Initializes a superpopulation with a list of populations.
+        Parameters:
+            pops (list): List of Population objects. Can be of length 1.
+        '''
+        self.pops = pops
+        self.active = [True] * len(pops)  # active populations as boolean
+        self.active_i = [i for i, active in enumerate(self.active) if active]  # active indices
+    
+    def simulate_generations(self, **kwargs):
+        '''
+        Simulates generations for all active populations in the superpopulation. 
+        Parameters:
+            **kwargs: All arguments are passed to the `simulate_generations()` method of each Population object. See that method for details. For each parameter, if a Python list is passed, it is assumed to be a list of arguments for each population in the superpopulation. If a list isn't passed, it is used for all populations.
+        '''
+        # iterates through each active population
+        for i, pop_i in enumerate(self.active_i):
+            pop = self.pops[pop_i]
+            # creates kwargs list for each population
+            pop_kwargs = {}
+            # loops through each key-value pair in kwargs
+            for key, value in kwargs.items():
+                # if the value is a list, try to get the i-th element
+                if isinstance(value, list):
+                    if i < len(value):
+                        pop_kwargs[key] = value[i]
+                    else:
+                        raise IndexError(f"Not enough elements in list for parameter '{key}' to match all populations.")
+                # if not a list, use the value directly for all populations
+                else:
+                    pop_kwargs[key] = value
+            # simulates generations for the population using population-specific kwargs
+            pop.simulate_generations(**pop_kwargs)
