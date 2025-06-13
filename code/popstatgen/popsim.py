@@ -569,7 +569,8 @@ class Trait:
             raise ValueError("Length of effects must match number of variants in G.")
         # if effects are per-allele, standardize them
         if per_allele:
-            effects = stat.get_standardized_effects(effects, G, std2allelic=False)
+            G_std = stat.get_G_std_for_effects(G)
+            effects = stat.get_standardized_effects(effects, G_std, std2allelic=False)
         trait._initialize_effects(G, effects, var_Eps)
         trait.generate_trait(G, fixed_h2=False)
         return trait
@@ -580,7 +581,8 @@ class Trait:
         '''
         self.M = effects.shape[0]
         self.effects = effects
-        self.effects_per_allele = stat.get_standardized_effects(self.effects, G, std2allelic=True)
+        G_std = stat.get_G_std_for_effects(G)
+        self.effects_per_allele = stat.get_standardized_effects(self.effects, G_std, std2allelic=True)
         self.j_causal = np.where(self.effects != 0)[0]  # indices of causal variants
         self.M_causal = len(self.j_causal)
         # variance components
@@ -672,7 +674,8 @@ class Trait:
             G = G[i_keep, :]
         trait_new = copy.deepcopy(self)
         # updates standardized effects
-        trait_new.effects = stat.get_standardized_effects(self.effects_per_allele, G, std2allelic=False)
+        G_std = stat.get_G_std_for_effects(G)
+        trait_new.effects = stat.get_standardized_effects(self.effects_per_allele, G_std, std2allelic=False)
         # indexes trait components
         trait_new.y = self.y[i_keep]
         for component in self.y_.keys():
@@ -891,13 +894,14 @@ class SuperPopulation:
         var_G = kwargs.get('var_G', 1.0)
         effects, _ = stat.generate_causal_effects(M, M_causal, var_G)
         if per_allele_p_pop is not None:
-            # if per-allele effects are specified, get standard deviation of genotype matrix from specified population
-            G_for_std = self.pops[per_allele_p_pop].G
+            # gets standard deviation of genotype matrix from specified population
+            G_std = stat.get_G_std_for_effects(self.pops[per_allele_p_pop].G)
         else:
-            # if not specified, joins populations and gets standard deviation of genotype matrix across them
-            G_for_std = np.concatenate([pop.G for pop, is_active
-                                       in zip(self.pops, self.active) if is_active], axis=0)
-        effects_per_allele = stat.get_standardized_effects(effects, G_for_std, std2allelic=True)
+            # gets average standard deviation of genotype matrix across all active populations
+            G_std = np.mean([stat.get_G_std_for_effects(pop.G) for pop, is_active
+                             in zip(self.pops, self.active) if is_active], axis=0)
+        
+        effects_per_allele = stat.get_standardized_effects(effects, G_std, std2allelic=True)
 
         # iterates through each active population
         for i, pop_i in enumerate(self.active_i):
