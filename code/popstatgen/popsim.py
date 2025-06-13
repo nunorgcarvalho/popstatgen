@@ -567,13 +567,13 @@ class Trait:
         # initializes the object with the given haplotype array
         if effects.shape[0] != G.shape[1]:
             raise ValueError("Length of effects must match number of variants in G.")
-        
+        # if effects are per-allele, standardize them
         if per_allele:
-            # if effects are per-allele, standardize them
-            effects = effects * G.std(axis=0)
+            effects = stat.get_standardized_effects(effects, G, std2allelic=False)
         trait._initialize_effects(G, effects, var_Eps)
         trait.generate_trait(G, fixed_h2=False)
         return trait
+    
     
     def _initialize_effects(self, G: np.ndarray, effects: np.ndarray, var_Eps: float = 0.0):
         '''
@@ -581,14 +581,14 @@ class Trait:
         '''
         self.M = effects.shape[0]
         self.effects = effects
-        self.effects_per_allele = self.effects / G.std(axis=0)
+        self.effects_per_allele = stat.get_standardized_effects(self.effects, G, std2allelic=True)
         self.j_causal = np.where(self.effects != 0)[0]  # indices of causal variants
         self.M_causal = len(self.j_causal)
         # variance components
         self.var = {}
         self.var['Eps'] = var_Eps
         self.var['G'] = self.effects.var() * G.shape[0]  # assumes independence!
-        self.h2 = self.var['G'] / np.sum(list(self.var.values()))
+        self.h2 = self.get_h2_var()
 
     def generate_trait(self, G: np.ndarray, fixed_h2: bool = False):
         '''
@@ -623,7 +623,40 @@ class Trait:
         '''
         h2_true = self.y_['G'].var() / self.y.var()
         return h2_true
+    
+    def get_h2_var(self) -> float:
+        '''
+        Returns the expected heritability based on the variance components of the trait. This is computed as the variance of the genetic component divided by the sum of variance components. This is likely to not be accurate if trait components are not independent. For a more accurate estimate, use `get_h2_true()`.
+        Returns:
+            h2 (float): Heritability of the trait.
+        '''
+        h2 = self.var['G'] / np.sum(list(self.var.values()))
+        return h2
 
+    @classmethod
+    def concatenate_traits(cls, traits: list, G: np.ndarray) -> 'Trait':
+        '''
+        Concatenates multiple Trait objects from multiple populations into a single Trait object representing that population. Assumes that the Trait objects represent the same trait, and that they have the same per-allele genetic effects.
+        Parameters:
+            traits (list): List of Trait objects to concatenate.
+            G (2D array): N*M NON-standardized genotype matrix with the joined population's genotypes. Used for converting per-allele effects to standardized effects.
+        Returns:
+            trait_new (Trait): A new Trait object containing the concatenated trait.
+        '''
+        # pulls per-allele effects from first population's Trait object   
+        effects_per_allele = traits[0].effects_per_allele
+        # creates placeholder Trait object (attributes will largely be overwritten)
+        trait_new = cls.from_effects(G, effects=effects_per_allele, per_allele=True)
+        # concatenates trait components
+        trait_new.y = np.concatenate([trait.y for trait in traits])
+        for component in traits[0].y_.keys():
+            # assumes all traits have the same components
+            trait_new.y_[component] = np.concatenate([trait.y_[component] for trait in traits])
+        # updates variance components
+        trait_new.var['Eps'] = trait_new.y_['Eps'].var()
+        trait_new.h2 = trait_new.get_h2_var()
+
+        return trait_new
 
 class SuperPopulation:
     '''
@@ -737,6 +770,11 @@ class SuperPopulation:
         H = np.concatenate([self.pops[i].H for i in pop_i], axis=0)
         # creates new population from merged haplotypes
         new_pop = Population.from_H(H, keep_past_generations=0)
+        # adds Trait objects by concatenating them, assumes the first population has all traits
+        for name, trait in self.pops[pop_i[0]].traits.items():
+            # concatenates traits from all populations being joined
+            traits = [self.pops[i].traits[name] for i in pop_i]
+            new_pop.traits[name] = Trait.concatenate_traits(traits, new_pop.G)
         
         # updates superpopulation
         self.add_population(new_pop, active_new=True, update_era=False)
@@ -821,15 +859,12 @@ class SuperPopulation:
         effects, _ = stat.generate_causal_effects(M, M_causal, var_G)
         if per_allele_p_pop is not None:
             # if per-allele effects are specified, get standard deviation of genotype matrix from specified population
-            G_std = self.pops[per_allele_p_pop].G.std(axis=0)
-            # scales effects to be per-allele
+            G_for_std = self.pops[per_allele_p_pop].G
         else:
             # if not specified, joins populations and gets standard deviation of genotype matrix across them
-            G_joined = np.concatenate([pop.G for pop, is_active
+            G_for_std = np.concatenate([pop.G for pop, is_active
                                        in zip(self.pops, self.active) if is_active], axis=0)
-            G_std = G_joined.std(axis=0)
-            G_std = G_std.mean(axis=0)
-        effects_per_allele = effects / G_std
+        effects_per_allele = stat.get_standardized_effects(effects, G_for_std, std2allelic=True)
 
         # iterates through each active population
         for i, pop_i in enumerate(self.active_i):
