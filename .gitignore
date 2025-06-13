@@ -1,6 +1,6 @@
 sections/.vscode/
 .vscode
-code/testing.ipynb
+code/testing*.ipynb
 code/__pycache__
 code/popstatgen/__pycache__
 
