@@ -56,3 +56,23 @@ def generate_noise_value(N: int, var_Eps: float = 0.0) -> np.ndarray:
     '''
     y_Eps = np.random.normal(loc=0, scale=np.sqrt(var_Eps), size = N)
     return y_Eps
+
+def get_standardized_effects(effects: np.ndarray, G: np.ndarray, std2allelic: bool = True) -> np.ndarray:
+        '''
+        Converts between per-allele and per-standardized-allele effects.
+        Parameters:
+            effects (1D array): M-length array of effects. Can be per-allele or per-standardized-allele.
+            G (2D array): N*M NON-standardized genotype matrix.
+            std2allelic (bool): If True (default), converts from per-standardized-allele to per-allele effects. If False, converts from per-allele to per-standardized-allele effects.
+        '''
+        # gets observed standard deviation of the genotype matrix
+        G_std = G.std(axis=0)
+        # if an allele is monomorphic, it uses the standard deviation one would get for a binomial variable with p = 1 / (N * P)
+        P = G.max() # estimates ploidy to be the maximum value in G, which may not always be true
+        G_std[G_std == 0] = 1 / (G.shape[0] * P)
+
+        if std2allelic:
+            effects_output = effects / G_std # per-allele effects
+        else:
+            effects_output = effects * G_std # per-standardized-allele effects
+        return effects_output

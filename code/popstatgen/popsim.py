@@ -658,6 +658,34 @@ class Trait:
 
         return trait_new
 
+    def index_trait(self, i_keep: np.ndarray, G: np.ndarray, G_already_indexed: bool = False) -> 'Trait':
+        '''
+        Returns a Trait object that contains only the trait data for the specified individuals' indices.
+        Parameters:
+            i (1D array): Array of length N_new containing indices of individuals to keep in the trait.
+            G (2D array): N*M NON-standardized genotype matrix. Can either be the original full genotype matrix or the version of it that has already been indexed to only include the individuals in `i`, depending on the `G_already_indexed` parameter.
+            G_already_indexed (bool): Whether the genotype matrix `G` has already been indexed to only include the individuals in `i`. If True, `G` should be a N_new*M matrix. If False, `G` should be the original full genotype matrix. Default is False.
+        Returns:
+            Trait: A new Trait object containing only the specified indices of the trait.
+        '''
+        if not G_already_indexed:
+            # if G is not already indexed, index it
+            G = G[i_keep, :]
+        trait_new = copy.deepcopy(self)
+        # updates standardized effects
+        trait_new.effects = stat.get_standardized_effects(self.effects_per_allele, G, std2allelic=False)
+        # indexes trait components
+        trait_new.y = self.y[i_keep]
+        for component in self.y_.keys():
+            # assumes all traits have the same components
+            trait_new.y_[component] = self.y_[component][i_keep]
+        # updates variance components
+        trait_new.var['Eps'] = trait_new.y_['Eps'].var()
+        trait_new.h2 = trait_new.get_h2_var()
+
+        return trait_new
+        
+
 class SuperPopulation:
     '''
     Class for a superpopulation, which contains multiple populations. Allows for multiple populations to be simulated forward in time together.
@@ -771,7 +799,7 @@ class SuperPopulation:
         # creates new population from merged haplotypes
         new_pop = Population.from_H(H, keep_past_generations=0)
         # adds Trait objects by concatenating them, assumes the first population has all traits
-        for name, trait in self.pops[pop_i[0]].traits.items():
+        for name in self.pops[pop_i[0]].traits.keys():
             # concatenates traits from all populations being joined
             traits = [self.pops[i].traits[name] for i in pop_i]
             new_pop.traits[name] = Trait.concatenate_traits(traits, new_pop.G)
@@ -813,7 +841,13 @@ class SuperPopulation:
             i_new = i_shuffled[i_start:i_end]
             # creates new population from the haplotypes of the original population
             H_new = source.H[i_new, :, :]
-            new_pops.append( Population.from_H(H_new) )
+            new_pop = Population.from_H(H_new)
+            # updates traits
+            for name, trait in source.traits.items():
+                # concatenates traits from all populations being joined
+                new_pop.traits[name] = trait.index_trait(i_new, source.G, G_already_indexed=False)
+            
+            new_pops.append( new_pop )
             # updates next index to start pulling from
             i_start = i_end
         # adds new population to the superpopulation
