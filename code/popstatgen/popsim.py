@@ -70,11 +70,10 @@ class Population:
             Population: A new Population object initialized with the given haplotype array.
         '''
         # creates new instance of class
-        instance = cls.__new__(cls)
+        pop = cls.__new__(cls)
         # initializes the object with the given haplotype array
-        instance._initialize_H(H, keep_past_generations=keep_past_generations)
-        return instance
-
+        pop._initialize_H(H, keep_past_generations=keep_past_generations)
+        return pop
 
     def _initialize_H(self, H: np.ndarray, keep_past_generations: int = 1):
         '''
@@ -167,10 +166,23 @@ class Population:
         '''
         if seed is not None:
             np.random.seed(seed)
-        self.traits[name] = Trait(self.X, **kwargs)
+        self.traits[name] = Trait(self.G, **kwargs)
         # stores actual heritability value
         self.traits[name].h2_true = self.traits[name].get_h2_true()
         self.traits[name].h2_trues = np.expand_dims(self.traits[name].h2_true, axis=0)
+    
+    def add_trait_from_effects(self, name: str, **kwargs):
+        '''
+        Initializes and generates trait from specified effects.
+        Parameters:
+            name (str): Name of trait.
+            **kwargs: All other arguments are passed to the Trait.from_effects() constructor.
+        '''
+        self.traits[name] = Trait.from_effects(self.G, **kwargs)
+        # stores actual heritability value
+        self.traits[name].h2_true = self.traits[name].get_h2_true()
+        self.traits[name].h2_trues = np.expand_dims(self.traits[name].h2_true, axis=0)
+
     
     def update_traits(self, fixed_h2: bool = True, traits: list = None):
         '''
@@ -187,7 +199,7 @@ class Population:
             if key not in traits:
                 continue
             trait = self.traits[key]
-            trait.generate_trait(self.X, fixed_h2=fixed_h2)
+            trait.generate_trait(self.G, fixed_h2=fixed_h2)
             # computes true heritability
             trait.h2_true = trait.get_h2_true()
             # adds to running heritability history
@@ -338,7 +350,7 @@ class Population:
                 if AM_type == 'phenotypic':
                     AM_values = self.traits[AM_trait].y
                 elif AM_type == 'genetic':
-                    AM_values = self.traits[AM_trait].y_G
+                    AM_values = self.traits[AM_trait].y_['G']
             # standardizes
             AM_values = (AM_values - AM_values.mean()) / AM_values.std()
         else:
@@ -527,49 +539,81 @@ class Trait:
     def __init__(self, G: np.ndarray, M_causal: int = None,
                  var_G: float = 1.0, var_Eps: float = 0.0):
         '''
-        Initializes and generates trait.
+        Initializes and generates trait based on variance components.
         Parameters:
             G (2D array): N*M NON-standardized genotype matrix.
             M_causal (int): Number of causal variants (variants with non-zero effect sizes). Default is all variants.
             var_G (float): Total expected variance contributed by per-standardized-allele genetic effects. Default is 1.0.
             var_Eps (float): Total expected variance contributed by random noise.
         '''
-        # stores trait properties
-        self.M = G.shape[1]
-        self.var = {}
-        self.var['G'] = var_G
-        self.var['Eps'] = var_Eps
-        # computes expected heritability
-        self.h2 = var_G / (var_G + var_Eps)
-        # computes causal effects
-        self.effects, self.j_causal = stat.generate_causal_effects(self.M, M_causal, self.var['G'])
-        self.effects_per_allele = self.effects / G.std(axis=0) 
-        self.M_causal = len(self.j_causal)
+        # generates causal effects
+        effects, _ = stat.generate_causal_effects(G.shape[1], M_causal, var_G)
+        self._initialize_effects(G, effects, var_Eps)
         # computes trait 
         self.generate_trait(G)
 
-    def generate_trait(self, G: np.ndarray, fixed_h2: bool = True):
+    @classmethod
+    def from_effects(cls, G: np.ndarray, effects: np.ndarray, var_Eps: float = 0.0, per_allele: bool = False) -> 'Trait':
+        '''
+        Initializes a trait from a given genotype matrix and genetic effects array.
+        Parameters:
+            G (2D array): N*M NON-standardized genotype matrix.
+            effects (1D array): M-length array of STANDARDIZED effects. Set non-causal effects to 0.
+            per_allele (bool): Whether the effects are per-allele. Default is False.
+        Returns:
+            Trait: A new Trait object initialized with the given genotype matrix and effects.
+        '''
+        trait = cls.__new__(cls)
+        # initializes the object with the given haplotype array
+        if effects.shape[0] != G.shape[1]:
+            raise ValueError("Length of effects must match number of variants in G.")
+        
+        if per_allele:
+            # if effects are per-allele, standardize them
+            effects = effects * G.std(axis=0)
+        trait._initialize_effects(G, effects, var_Eps)
+        trait.generate_trait(G, fixed_h2=False)
+        return trait
+    
+    def _initialize_effects(self, G: np.ndarray, effects: np.ndarray, var_Eps: float = 0.0):
+        '''
+        Initializes the trait's genetic effects and variance components. See `from_effects` class method for details.
+        '''
+        self.M = effects.shape[0]
+        self.effects = effects
+        self.effects_per_allele = self.effects / G.std(axis=0)
+        self.j_causal = np.where(self.effects != 0)[0]  # indices of causal variants
+        self.M_causal = len(self.j_causal)
+        # variance components
+        self.var = {}
+        self.var['Eps'] = var_Eps
+        self.var['G'] = self.effects.var() * G.shape[0]  # assumes independence!
+        self.h2 = self.var['G'] / np.sum(list(self.var.values()))
+
+    def generate_trait(self, G: np.ndarray, fixed_h2: bool = False):
         '''
         Generates/updates trait using stored genetic effects and recomputing other components. Automatically updates object's attributes, instead of returning trait values.
         Parameters:
             G (2D array): N*M NON-standardized genotype matrix.
-            fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Genetic component must be non-zero. Default is True.
+            fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Genetic component must be non-zero. Default is False.
         '''
         N = G.shape[0]
+        # makes empty dictionary for trait components
+        self.y_ = {}
         # genetic component (using per-allele effects)
-        self.y_G = stat.compute_genetic_value(G, self.effects_per_allele)
+        self.y_['G'] = stat.compute_genetic_value(G, self.effects_per_allele)
 
         var_Eps = self.var['Eps']
-        y_nonEps = self.y_G
+        y_nonEps = self.y_['G']
         # recomputes non-noise component to get needed var_Eps to maintain heritability
         if fixed_h2:
             var_Eps = (y_nonEps.var() / self.h2) - y_nonEps.var()
 
         # random noise component
-        self.y_Eps = stat.generate_noise_value(N,var_Eps)
+        self.y_['Eps'] = stat.generate_noise_value(N,var_Eps)
 
         # computes actual trait as additive of individual components
-        self.y = y_nonEps + self.y_Eps
+        self.y = y_nonEps + self.y_['Eps']
 
     def get_h2_true(self) -> float:
         '''
@@ -577,7 +621,7 @@ class Trait:
         Returns:
             h2_true (float): True heritability of the trait.
         '''
-        h2_true = self.y_G.var() / self.y.var()
+        h2_true = self.y_['G'].var() / self.y.var()
         return h2_true
 
 
@@ -719,6 +763,45 @@ class SuperPopulation:
             graph[:len(self.graph), :len(self.graph)] = self.graph
         self.graph = graph
 
+    ################
+    #### Traits ####
+    ################
+    def add_trait(self, name: str, per_allele_p_pop: int = None, **kwargs):
+        '''
+        Adds a trait to all active populations in the superpopulation.
+        Parameters:
+            name (str): Name of the trait to add.
+            per_allele_p_pop (int): The index of the population from which to pull allele frequencies in order to generate per-allele effect sizes. The method first generates standardized per-allele effects, but for biological realism, effects are fixed across populations by scaling them to be per-allele effect sizes. This requires having a set of allele frequencies (or more precisely, genotype standard deviations) to scale effects by, which can be extracted from the specified population index. If not provided (Default), the method will join the active populations together and get the standard deviation of the genotype matrix across them.
+            **kwargs: All arguments are analogous to the `Trait` constructor method. See that method for details. However, the per-allele genetic effects are shared across all populations. For each parameter except `var_G` and `M_causal`, if a Python list is passed, it is assumed to be a list of arguments for each population in the superpopulation. If a list isn't passed, it is used for all populations.
+        '''
+        # generates genetic effects
+        M = self.pops[0].M  # assumes all populations have the same number of variants
+        M_causal = kwargs.get('M_causal', M)
+        var_G = kwargs.get('var_G', 1.0)
+        effects, _ = stat.generate_causal_effects(M, M_causal, var_G)
+        if per_allele_p_pop is not None:
+            # if per-allele effects are specified, get standard deviation of genotype matrix from specified population
+            G_std = self.pops[per_allele_p_pop].G.std(axis=0)
+            # scales effects to be per-allele
+        else:
+            # if not specified, joins populations and gets standard deviation of genotype matrix across them
+            G_joined = np.concatenate([pop.G for pop, is_active
+                                       in zip(self.pops, self.active) if is_active], axis=0)
+            G_std = G_joined.std(axis=0)
+            G_std = G_std.mean(axis=0)
+        effects_per_allele = effects / G_std
+
+        # iterates through each active population
+        for i, pop_i in enumerate(self.active_i):
+            pop = self.pops[pop_i]
+            pop_kwargs = core.get_pop_kwargs(i, **kwargs)
+            # Remove keys not accepted by add_trait_from_effects
+            pop_kwargs.pop('var_G', None)
+            pop_kwargs.pop('M_causal', None)
+            # adds trait to population using pre-computed effects
+            pop.add_trait_from_effects(name=name, effects=effects_per_allele, per_allele=True, **pop_kwargs)
+
+
     ####################
     #### Simulating ####
     ####################
@@ -733,16 +816,17 @@ class SuperPopulation:
             pop = self.pops[pop_i]
             # creates kwargs list for each population
             pop_kwargs = {}
-            # loops through each key-value pair in kwargs
-            for key, value in kwargs.items():
-                # if the value is a list, try to get the i-th element
-                if isinstance(value, list):
-                    if i < len(value):
-                        pop_kwargs[key] = value[i]
-                    else:
-                        raise IndexError(f"Not enough elements in list for parameter '{key}' to match all populations.")
-                # if not a list, use the value directly for all populations
-                else:
-                    pop_kwargs[key] = value
-            # simulates generations for the population using population-specific kwargs
+            # # loops through each key-value pair in kwargs
+            # for key, value in kwargs.items():
+            #     # if the value is a list, try to get the i-th element
+            #     if isinstance(value, list):
+            #         if i < len(value):
+            #             pop_kwargs[key] = value[i]
+            #         else:
+            #             raise IndexError(f"Not enough elements in list for parameter '{key}' to match all populations.")
+            #     # if not a list, use the value directly for all populations
+            #     else:
+            #         pop_kwargs[key] = value
+            # # simulates generations for the population using population-specific kwargs
+            pop_kwargs = core.get_pop_kwargs(i, **kwargs)
             pop.simulate_generations(**pop_kwargs)
