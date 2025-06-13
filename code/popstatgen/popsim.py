@@ -574,7 +574,6 @@ class Trait:
         trait.generate_trait(G, fixed_h2=False)
         return trait
     
-    
     def _initialize_effects(self, G: np.ndarray, effects: np.ndarray, var_Eps: float = 0.0):
         '''
         Initializes the trait's genetic effects and variance components. See `from_effects` class method for details.
@@ -587,7 +586,7 @@ class Trait:
         # variance components
         self.var = {}
         self.var['Eps'] = var_Eps
-        self.var['G'] = self.effects.var() * G.shape[0]  # assumes independence!
+        self.var['G'] = self.effects.var() * G.shape[1]  # assumes independence!
         self.h2 = self.get_h2_var()
 
     def generate_trait(self, G: np.ndarray, fixed_h2: bool = False):
