@@ -747,6 +747,46 @@ class SuperPopulation:
             # updates graph to reflect that the populations are now joined
             self.graph[i, len(self.pops)-1] = 1
 
+    def split_population(self, pop_i: int, N_new: Union[int, list] = 2):
+        '''
+        Splits a population into two or more populations. This is done by randomly drawing individuals from the source population. The new populations are created from the haplotypes of the original population. The original population is inactivated and the new populations are added to the superpopulation as active populations.
+        Parameters:
+            pop_i (int): Index of the population to split.
+            N_new (int or list): Number of individuals in each new population. If a single integer is passed (Default = 2), it is treated as the number of equally-sized populations to split into. If a list is passed, it should have the same length as the number of new populations and specifies the number of individuals in each population. The list must sum to less than or equal to the number of individuals in the original population.
+        '''
+        source = self.pops[pop_i]
+        # checks if population can be split
+        if isinstance(N_new, int):
+            # if only a single integer is passed, split into that many equally-sized populations
+            N_new = [source.N // N_new] * N_new # rounds down to nearest integer
+        elif len(N_new) < 2:
+            raise ValueError("Must specify at least two new populations to split into.")
+        elif sum(N_new) > source.N:
+            raise ValueError("Sum of N_new must be less than or equal to the number of individuals in the original population.")
+        K = len(N_new)  # number of new populations
+        # shuffles indices of individuals in the source population
+        i_shuffled = np.arange(source.N)
+        np.random.shuffle(i_shuffled)  # shuffles haplotypes
+        i_start = 0
+        new_pops = []
+        for i in range(K):
+            # gets indices of individuals for the new population
+            i_end = i_start + N_new[i]
+            i_new = i_shuffled[i_start:i_end]
+            # creates new population from the haplotypes of the original population
+            H_new = source.H[i_new, :, :]
+            new_pops.append( Population.from_H(H_new) )
+            # updates next index to start pulling from
+            i_start = i_end
+        # adds new population to the superpopulation
+        new_pops_i = np.arange(len(self.pops), len(self.pops) + K)
+        self.add_population(new_pops, active_new=True, update_era=True)
+        self.inactivate_population(pop_i)
+        # updates graph
+        for i in new_pops_i:
+            # updates graph to reflect that the populations are now split
+            self.graph[pop_i, i] = 1
+
 
     #######################
     #### Lineage Graph ####
@@ -801,7 +841,6 @@ class SuperPopulation:
             # adds trait to population using pre-computed effects
             pop.add_trait_from_effects(name=name, effects=effects_per_allele, per_allele=True, **pop_kwargs)
 
-
     ####################
     #### Simulating ####
     ####################
@@ -816,17 +855,22 @@ class SuperPopulation:
             pop = self.pops[pop_i]
             # creates kwargs list for each population
             pop_kwargs = {}
-            # # loops through each key-value pair in kwargs
-            # for key, value in kwargs.items():
-            #     # if the value is a list, try to get the i-th element
-            #     if isinstance(value, list):
-            #         if i < len(value):
-            #             pop_kwargs[key] = value[i]
-            #         else:
-            #             raise IndexError(f"Not enough elements in list for parameter '{key}' to match all populations.")
-            #     # if not a list, use the value directly for all populations
-            #     else:
-            #         pop_kwargs[key] = value
-            # # simulates generations for the population using population-specific kwargs
+            # simulates generations for the population using population-specific kwargs
             pop_kwargs = core.get_pop_kwargs(i, **kwargs)
             pop.simulate_generations(**pop_kwargs)
+
+    #######################
+    #### Visualization ####
+    #######################
+    def print_attributes(self, attribute: str, only_active: bool = True):
+        '''
+        Prints the attributes of all populations in the superpopulation.
+        Parameters:
+            only_active (bool): Whether to only print attributes of active populations. Default is True.
+        '''
+        # iterates through each population
+        for i, pop in enumerate(self.pops):
+            if only_active and not self.active[i]:
+                continue
+            print(f'Population {i}:')
+            print(getattr(pop, attribute, 'Attribute not found.'))
