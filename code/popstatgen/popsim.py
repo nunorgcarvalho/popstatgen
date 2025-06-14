@@ -18,6 +18,7 @@ import matplotlib.pyplot as plt
 from typing import Tuple, Union
 from scipy import sparse
 import copy
+import inspect
 
 class Population:
     '''
@@ -97,6 +98,12 @@ class Population:
         # further attributes
         self._update_obj(H=H, update_past=False)
         self.ps = np.expand_dims(self.p, axis=0)
+
+        # defines metrics
+        self.metric = {}
+        self._define_metric('p', pop.compute_freqs, shape = [self.M], # allele frequency
+                            P = self.P)
+        self._initialize_metrics(G = self.G)
 
     ###################################
     #### Storing object attributes ####
@@ -182,7 +189,6 @@ class Population:
         # stores actual heritability value
         self.traits[name].h2_true = self.traits[name].get_h2_true()
         self.traits[name].h2_trues = np.expand_dims(self.traits[name].h2_true, axis=0)
-
     
     def update_traits(self, fixed_h2: bool = True, traits: list = None):
         '''
@@ -254,6 +260,88 @@ class Population:
         ps_quantile = np.quantile(self.ps, quantiles, axis=1)
         return (ps_mean, ps_quantile)
     
+    def _define_metric(self, metric_name: str, metric_func: callable, shape: list, **kwargs):
+        '''
+        Defines a metric for the population object. The metric is computed using the provided function and stored in the `metric` attribute of the object.
+
+        Parameters:
+            metric_name (str): Name of the metric to define.
+            metric_func (callable): Function that computes the metric.
+            shape (list): A list specifying the shape of the metric output at each generation. So for example, a metric like allele frequency would have [M] since at each generation, there is an allele frequency for each variant. A metric like population size would have [1] since it is a single value at each generation. Can be greater than length 1.
+            **kwargs: Additional keyword arguments to pass to the metric function. These should be fixed settings of the metric function, not parameters that change over time.
+        '''
+        self.metric[metric_name] = {
+            'func': metric_func, # the base function that computes the metric
+            'active': True, # whether the metric is run per generation
+            'shape': shape, # the shape of the metric output at each generation
+            'valid_keys': set(inspect.signature(metric_func).parameters.keys()), # the valid keys for the metric function
+            'kwargs': kwargs, # the fixed settings of the metric function
+            'values': None # the values of the metric over generations, initialized to None
+            }
+    
+    def _prep_metrics(self, generations: int):
+        '''
+        For each active metric, makes temporary array to store metric values over generations of simulation.
+        Parameters:
+            generations (int): Number of new generations to prepare each metric for.
+        '''
+        for metric_name in self.metric:
+            if self.metric[metric_name]['active']:
+                # adds number of generations to first dimension of metric history shape
+                shape = [generations] + self.metric[metric_name]['shape']
+                # initializes values to NaN
+                self.metric[metric_name]['temp'] = np.full(shape, np.nan)
+
+    def _update_temp_metrics(self, t: int, **kwargs):
+        '''
+        Updates the temporary metrics for the current generation. This is done by calling the metric function with the current generation's data and storing the result in the temporary metric array. The method `_prep_metrics` should be called before this method to prepare the temporary metric arrays.
+        Parameters:
+            t (int): Generation index for new batch of simulated generations. That is, instead of the population's current generation, it should be the index of the generation within the pre-specified number of new generations to simulate by `simulate_generations()`.
+            **kwargs: All extra arguments that are passed to any metric function. Only the parameters needed for each metric function are passed to that function. The pre-specified arguments set in `_define_metric()` are automatically passed to each metric function.
+        '''
+        for metric_name in self.metric:
+            if self.metric[metric_name]['active']:
+                fixed_args = self.metric[metric_name]['kwargs']
+                new_args = {k: v for k, v in kwargs.items() if k in self.metric[metric_name]['valid_keys']}
+                args = {**new_args, **fixed_args}
+                # runs metric
+                metric_output = self.metric[metric_name]['func'](**args)
+                # forces single-value metrics to be in array format
+                if not isinstance(metric_output, np.ndarray):
+                    metric_output = np.array([metric_output])
+                # updates metric values in temporary array
+                self.metric[metric_name]['temp'][t,] = metric_output
+        
+    def _update_metric_history(self):
+        '''
+        Updates the metric history for each active metric by appending the temporary metric values to the permanent metric values stored in the object.
+        '''
+        for metric_name in self.metric:
+            if self.metric[metric_name]['active']:
+                # gets temporary metric values
+                temp_values = self.metric[metric_name]['temp']
+                # appends to permanent values
+                if self.metric[metric_name]['values'] is None:
+                    self.metric[metric_name]['values'] = temp_values
+                else:
+                    self.metric[metric_name]['values'] = np.concatenate((self.metric[metric_name]['values'], temp_values), axis=0)
+                # clears temporary metric values
+                self.metric[metric_name].pop('temp', None)
+
+    def _initialize_metrics(self, **kwargs):
+        '''
+        Initializes the metric history for each active metric by computing metrics for the current (starting) generation and storing them in the metric values. Should be called after defining metrics with `_define_metric()`.
+        Parameters:
+            **kwargs: All extra arguments that are passed to any metric function. Only the parameters needed for each metric function are passed to that function. The pre-specified arguments set in `_define_metric()` are automatically passed to each metric function.
+        '''
+        self._prep_metrics(1)
+        self._update_temp_metrics(0, **kwargs)
+        self._update_metric_history()
+                
+
+
+
+
     ####################################
     #### Simulating forward in time ####
     ####################################
@@ -297,6 +385,8 @@ class Population:
             trait_updates (bool): Whether to update traits after each generation. Default is False, meaning that traits are only updated at the end of the simulation.
             **kwargs: All other arguments are passed to the `next_generation` or `generate_offspring` methods. See those methods for details.
         '''
+        # preps metrics for new generations
+        self._prep_metrics(generations)
         # keeps track of allele frequencies over generations if specified
         previous_gens = self.ps.shape[0]
         ps = np.full( (previous_gens + generations, self.M), np.nan)
@@ -312,6 +402,7 @@ class Population:
             self._update_obj(H=H)
             # records metrics
             ps[previous_gens + t,] = self.p
+            self._update_temp_metrics(t, G=self.G)
             if trait_updates:
                 self.update_traits(fixed_h2=fixed_h2)
         self.T_breaks.append(previous_gens + generations)
@@ -319,6 +410,7 @@ class Population:
             self.update_traits(fixed_h2=fixed_h2)
         # saves metrics to object
         self.ps = ps
+        self._update_metric_history()
 
     def _pair_mates(self, AM_r: float = 0, AM_trait: Union[str, np.ndarray] = None,
                     AM_type: str = 'phenotypic') -> np.ndarray:
