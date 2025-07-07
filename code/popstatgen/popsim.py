@@ -337,11 +337,7 @@ class Population:
         self._prep_metrics(1)
         self._update_temp_metrics(0, **kwargs)
         self._update_metric_history()
-                
-
-
-
-
+    
     ####################################
     #### Simulating forward in time ####
     ####################################
@@ -627,9 +623,8 @@ class Trait:
     '''
     Class for a trait belonging to a Population object.
     '''
-
     def __init__(self, G: np.ndarray, M_causal: int = None,
-                 var_G: float = 1.0, var_Eps: float = 0.0):
+                 var_G: float = 1.0, var_Eps: float = 0.0, dist: str = 'normal'):
         '''
         Initializes and generates trait based on variance components.
         Parameters:
@@ -637,9 +632,12 @@ class Trait:
             M_causal (int): Number of causal variants (variants with non-zero effect sizes). Default is all variants.
             var_G (float): Total expected variance contributed by per-standardized-allele genetic effects. Default is 1.0.
             var_Eps (float): Total expected variance contributed by random noise.
+            dist (str): Distribution to draw causal effects from. Options are:
+            - 'normal': Normal distribution (default).
+            - 'constant': All effect sizes are the same.
         '''
         # generates causal effects
-        effects, _ = stat.generate_causal_effects(G.shape[1], M_causal, var_G)
+        effects, _ = stat.generate_causal_effects(G.shape[1], M_causal, var_G, dist)
         self._initialize_effects(G, effects, var_Eps)
         # computes trait 
         self.generate_trait(G)

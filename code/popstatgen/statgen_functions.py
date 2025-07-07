@@ -12,13 +12,16 @@ import numpy as np
 #### Trait generation ####
 ##########################
 
-def generate_causal_effects(M: int, M_causal: int = None, var_G: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+def generate_causal_effects(M: int, M_causal: int = None, var_G: float = 1.0, dist: str = 'normal') -> tuple[np.ndarray, np.ndarray]:
     '''
-    Generates variant effect sizes for some trait. Default interpretation is per-standardized-allele effect sizes. Non-causal variant effects are set to 0. Causal effects are drawn from normal distribution with mu=0 and sd=`var_G`/`M_causal`.
+    Generates variant effect sizes for some trait. Default interpretation is per-standardized-allele effect sizes. Non-causal variant effects are set to 0. Causal effects are drawn from a specified distribution (default is Normal).
     Parameters:
         M (int): Total number of variants (causal and non-causal).
         M_causal (int): Number of causal variants (variants with non-zero effect sizes). Default is all variants.
         var_G (float): Total expected variance contributed by per-standardized-allele genetic effects. Default is 1.0.
+        dist (str): Distribution to draw causal effects from. Options are:
+            - 'normal': Normal distribution (default).
+            - 'constant': All effect sizes are the same.
     Returns:
         tuple ((causal_effects, j_causal)):
         Where:
@@ -28,8 +31,11 @@ def generate_causal_effects(M: int, M_causal: int = None, var_G: float = 1.0) ->
     if M_causal is None:
         M_causal = M
     causal_effects = np.zeros(M)
-    j_causal = np.random.choice(M, M_causal, replace=False) 
-    causal_effects[j_causal] = np.random.normal(0, np.sqrt(var_G/M_causal), M_causal)
+    j_causal = np.random.choice(M, M_causal, replace=False)
+    if dist == 'normal':
+        causal_effects[j_causal] = np.random.normal(0, np.sqrt(var_G/M_causal), M_causal)
+    elif dist == 'constant':
+        causal_effects[j_causal] = np.sqrt(var_G/M_causal)
     return (causal_effects, j_causal)
 
 def compute_genetic_value(G: np.ndarray, effects: np.ndarray) -> np.ndarray:
@@ -88,3 +94,24 @@ def get_standardized_effects(effects: np.ndarray, G_std: np.ndarray, std2allelic
         else:
             effects_output = effects * G_std # per-standardized-allele effects
         return effects_output
+
+def run_HE_regression(A: np.ndarray, y:np.ndarray):
+    '''
+    Performs Haseman-Elston regression to estimate heritability.
+    Parameters:
+        A (2D array): N*N matrix of pairwise genetic relatedness coefficients. Can be ei
+        y (1D array): N-length array of trait values. Should be standardized.
+    '''
+    y = (y - y.mean()) / y.std() # standardizes trait values
+    N = A.shape[0]
+    numerator = []
+    denominator = []
+    for j in range(N):
+        for k in range(N):
+            if j >= k: # since matrix is symmetrical along diagonal
+                continue
+            numerator.append( A[j,k] * y[j] * y[k] )
+            denominator.append( A[j,k]**2 )
+    # computes h2
+    h2g_HE = sum(numerator) / sum(denominator)
+    return h2g_HE
