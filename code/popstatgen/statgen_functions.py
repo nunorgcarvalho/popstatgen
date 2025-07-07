@@ -207,80 +207,61 @@ def plot_HE_regression(A: np.ndarray, y: np.ndarray, bins: int = 5) -> None:
 
 #### REstricted Maximum Likelihood (REML) Methods ####
 
-def run_REML_EM(y: np.ndarray, X: np.ndarray, Zs: list[np.ndarray], Bs: list[np.ndarray], init: list[float],
-                tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> Tuple[np.ndarray, np.ndarray, float]:
+def run_REML(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None], X: np.ndarray = None, init: list[float] = None,
+             method: str = 'EM', tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> Tuple[np.ndarray, np.ndarray, float]:
     '''
-    Runs REML using the EM algorithm to estimate variance components.
+    Runs REML for estimating variance components while accounting for fixed effects. Different algorithms are available.
     Parameters:
-        y (1D array): N-length array of trait values. Should be standardized (?).
-        X (2D array): N*K design matrix of fixed effects covariates. Set to None if no fixed effects.
-        Zs (list of 2D arrays): List containing M random effects design matrices that are N*N_i. Don't include residual matrix.
-        Bs (list of 1D arrays): List containing M random effects covariance matrices that are N_i*N_i. Don't include residual matrix.
-        init (list): M-length list with initial guess for the variance components.
+        y (1D array): N-length array of trait values.
+        Bs (list of 2D arrays): List containing M random effects covariance matrices that are N_i*N_i. Don't include residual matrix.
+        Zs (list of 2D arrays): List containing M random effects design matrices that are N*N_i. Don't include residual matrix. If an element is None, it assumes the identity matrix, but requires the the corresponding B matrix to be N*N.
+        X (2D array): N*K design matrix of fixed effects covariates. If None, doesn't incorporate fixed effects.
+        init (list): M-length list with initial guess for the variance components. Default is random initialization.
+        method (str): Method to use for REML estimation. Options are:
+            - 'EM': Expectation-Maximization algorithm (default). Slow but stable.
+            - 'NR': Newton-Raphson algorithm. Faster than EM.
+            - 'FS': Fisher Scoring algorithm (similar to NR). Even faster than NR.
         tol (float): Tolerance for convergence. Default is 1e-5.
         max_iter (int): Maximum number of iterations. Default is 1000.
-        verbose (bool): If True, prints convergence information. Default is True.
+        verbose (bool): If True, prints convergence information per iteration. Default is True.
     Returns:
         Tuple containing:
             - var_components (1D array): Estimated variance components, the last of which is the residual variance.
             - beta (1D array): Estimated fixed effect coefficients.
             - log_likelihood (float): Log-likelihood of the model at convergence.
     '''
-    # Based on pg 797 of Bruce Walsh and Michael Lynch's "Genetics and Analysis of Quantitative Traits" (1998)
     N = y.shape[0] # number of individuals
     y = (y - y.mean()) / y.std()  # standardizes y to have mean 0 and variance 1
 
     # adds residual matrix to Zs and Bs and initial guess
     Zs.append(np.identity(N))  # residual design matrix (identity)
     Bs.append(np.identity(N)) # residual covariance matrix (identity)
-    init_resid = y.var() - np.sum(init)
-    if init_resid < 0:
-        raise ValueError("Initial guesses for variance components exceed total variance of y.")
-    init.append(init_resid)  # initial guess for residual variance component
+    # fills out Z matrices if None
+    for i in range(len(Zs)):
+        if Zs[i] is None:
+            Zs[i] = np.identity(N)
+            if Bs[i].shape[0] != N or Bs[i].shape[1] != N:
+                raise ValueError(f"Zs[{i}] is None, but the corresponding B matrix is not a square matrix of size {N}.")
+    # randomly generates initial guesses for variance components if not provided
+    if init is None:
+        init = np.random.uniform(0, 1, len(Bs))
+        init = init / np.sum(init)  # normalizes to sum to 1
+    else:
+        init_resid = y.var() - np.sum(init)
+        if init_resid < 0:
+            raise ValueError("Initial guesses for variance components exceed total variance of y.")
+        init.append(init_resid)  # initial guess for residual variance component
 
-    M = len(Zs)  # number of random effects (technically M+1, since we added the residual matrix)
-    N_i = [Z.shape[1] for Z in Zs]  # number of clusters in each random effect
+    if method == 'EM':
+        vars_i = _run_REML_EM(y, Bs, Zs, X, init, tol, max_iter, verbose)
+    elif method in ['NR', 'FS']:
+        vars_i = _run_REML_NRFS(y, Bs, Zs, X, init, method=method, tol=tol, max_iter=max_iter, verbose=verbose)
+    else:
+        raise ValueError(f"Method '{method}' is not implemented. See documentation.")
 
-    vars_i = np.array(init)  # initial variance components
-    for iter in range(max_iter):
-        # V matrix
-        Vs_i = [Zs[i] @ Bs[i] @ Zs[i].T for i in range(M)]
-        V = sum(vars_i[i] * Vs_i[i] for i in range(M))  # total variance matrix
-        V_inv = np.linalg.inv(V)
-        # P matrix
-        if X is None:
-            P = V_inv
-        else:
-            P = V_inv - V_inv @ X @ np.linalg.inv(X.T @ V_inv @ X) @ X.T @ V_inv
-
-        offsets = np.zeros(M)  # offsets for each random effect
-        for i in range(M):
-            var_i = vars_i[i] # variance component            
-            V_i = Vs_i[i] # category-specific variance matrix
-
-            # E-step: compute expected values of random effects given current estimates
-            offset = var_i**2 * ( y.T @ P @ V_i @ P @ y - np.trace(P @ V_i)) / N_i[i]
-            offsets[i] = offset
-
-            # M-step: update variance components
-            vars_i[i] = var_i + offset
-
-            if verbose and i < M - 1:  # don't print for residual variance component
-                print(f"Iteration {iter+1}, Random Effect {i+1}: Updated variance component = {vars_i[i]:.6f}, Offset = {offset:.6f}")
-        
-        # check convergence
-        if np.max(np.abs(offsets)) < tol:
-            print(f"Converged after {iter+1} iterations.")
-            break
-
-        if iter == max_iter - 1:
-            print(f"Reached maximum iterations ({max_iter}) without convergence.")
-            break
-    
-    # final V matrix
-    Vs_i = [Zs[i] @ Bs[i] @ Zs[i].T for i in range(M)]
-    V = sum(vars_i[i] * Vs_i[i] for i in range(M))  # total variance matrix
-    V_inv = np.linalg.inv(V)
+    # final V matrix after convergence
+    (_, V, V_inv) = _get_V_components(Zs, Bs, vars_i)  # computes Vs_i, V, and V_inv
+    #return V, V_inv
 
     # fixed effect estimation
     if X is None:
@@ -291,12 +272,154 @@ def run_REML_EM(y: np.ndarray, X: np.ndarray, Zs: list[np.ndarray], Bs: list[np.
         XB = X @ beta
 
     # log-likelihood calculation
-    LL = -0.5*N*np.log(2 * np.pi) - 0.5*np.log(np.linalg.det(V)) - 0.5*(y - XB).T @ V_inv @ (y - XB)
+    logdetV = 2 * np.sum(np.log(np.diag(np.linalg.cholesky(V)))) # for numerical stability
+    #LL = -0.5*N*np.log(2 * np.pi) - 0.5*np.log(np.linalg.det(V)) - 0.5*(y - XB).T @ V_inv @ (y - XB)
+    LL = -0.5*N*np.log(2 * np.pi) - 0.5*logdetV - 0.5*(y - XB).T @ V_inv @ (y - XB)
 
     # returns
     return vars_i, beta, LL.item()  # .item() to convert single-element array to float
 
+def _get_V_components(Zs: list[np.ndarray], Bs: list[np.ndarray], vars_i: np.ndarray,
+                      jitter = 1e-6) -> np.ndarray:
+    '''
+    Computes the total variance matrix V from the random effects design matrices and covariance matrices.
+    Parameters:
+        Zs (list of 2D arrays): List containing M random effects design matrices that are N*N_i.
+        Bs (list of 2D arrays): List containing M random effects covariance matrices that are N_i*N_i.
+        vars_i (1D array): Estimated variance components for each random effect.
+        jitter (float): Small value added to diagonal of variance matrices to ensure positive definiteness. Default is 1e-6.
+    Returns:
+        tuple (Vs_i, V, V_inv):
+        Where:
+        - Vs_i (list of 2D arrays): List of M category-specific variance matrices.
+        - V (2D array): Total variance matrix.
+        - V_inv (2D array): Inverse of the total variance matrix.
+    '''
+    M = len(Zs)
+    Vs_i = [Zs[i] @ Bs[i] @ Zs[i].T for i in range(M)]
+    V = sum(vars_i[i] * Vs_i[i] for i in range(M))  # total variance matrix
+    if jitter > 0:
+        V += np.eye(V.shape[0]) * jitter # adds jitter to diagonal for numerical stability
+    V_inv = np.linalg.inv(V)
+    return (Vs_i, V, V_inv)
 
-            
-            
+def _get_P_matrix(V_inv: np.ndarray, X: np.ndarray = None) -> np.ndarray:
+    '''
+    Computes the P matrix used in REML estimation.
+    Parameters:
+        V_inv (2D array): Inverse of the total variance matrix.
+        X (2D array): N*K design matrix of fixed effects covariates. If None, P is just V_inv.
+    Returns:
+        P (2D array): The P matrix used in REML estimation.
+    '''
+    if X is None:
+        P = V_inv
+    else:
+        P = V_inv - V_inv @ X @ np.linalg.inv(X.T @ V_inv @ X) @ X.T @ V_inv
+    return P
 
+def _run_REML_EM(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None], X: np.ndarray = None, init: list[float] = None,
+                 tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> np.ndarray:
+    '''
+    Runs REML using the Expectation-Maximization (EM) algorithm to estimate variance components. See `run_REML` for parameter descriptions. Returns variane components.
+    '''
+    # Based on pg 797 of Bruce Walsh and Michael Lynch's "Genetics and Analysis of Quantitative Traits" (1998)
+    
+    M = len(Zs) # number of random effects (technically M+1, since we added the residual matrix)
+    N_i = [Z.shape[1] for Z in Zs] # number of clusters in each random effect
+    vars_i = np.array(init) # initial variance components
+
+    for iter in range(max_iter):
+        # V matrix
+        (Vs_i, V, V_inv) = _get_V_components(Zs, Bs, vars_i)  # computes Vs_i, V, and V_inv
+        print(np.linalg.det(V))
+        # P matrix
+        P = _get_P_matrix(V_inv, X)  # computes P matrix
+
+        offsets = np.zeros(M) # offsets for parameter estimate
+        for i in range(M):
+            var_i = vars_i[i] # variance component            
+            V_i = Vs_i[i] # category-specific variance matrix
+
+            # E-step: compute expected values of random effects given current estimates
+            # Equation 27.37a of textbook (modified)
+            offset = var_i**2 * ( y.T @ P @ V_i @ P @ y - np.trace(P @ V_i)) / N_i[i]
+            offsets[i] = offset
+
+            # M-step: update variance components
+            # Equation 27.36a of textbook (modified)
+            vars_i[i] = var_i + offset
+            vars_i = np.maximum(vars_i, 1e-6) # ensures variance components are positive
+
+            if verbose and i < M - 1:  # don't print for residual variance component
+                print(f"Iteration {iter+1}, Random Effect {i+1}: Updated variance component = {vars_i[i]:.6f}, Offset = {offset:.6f}")
+        
+        # check convergence
+        if np.max(np.abs(offsets)) < tol:
+            print(f"Converged after {iter+1} iterations.")
+            break
+        if iter == max_iter - 1:
+            print(f"Reached maximum iterations ({max_iter}) without convergence.")
+            break
+
+    return vars_i
+
+def _run_REML_NRFS(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None], X: np.ndarray = None, init: list[float] = None,
+                   method: str = 'FS', tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> np.ndarray:
+            
+    '''
+    Runs REML using the Newton-Raphson (NR) algorithm to estimate variance components. Also does the Fisher Scoring (FS) method, which is very similar. See `run_REML` for parameter descriptions. Returns variane components.
+    '''
+    # Based on pg 794 of Bruce Walsh and Michael Lynch's "Genetics and Analysis of Quantitative Traits" (1998)
+
+    M = len(Zs) # number of random effects (technically M+1, since we added the residual matrix)
+    N_i = [Z.shape[1] for Z in Zs] # number of clusters in each random effect
+    vars_i = np.array(init) # initial variance components
+    for iter in range(max_iter):
+        # V matrix
+        (Vs_i, V, V_inv) = _get_V_components(Zs, Bs, vars_i)  # computes Vs_i, V, and V_inv
+        # P matrix
+        P = _get_P_matrix(V_inv, X)  # computes P matrix
+
+        dLs = np.zeros(M)
+        H = np.zeros((M, M))
+        for i in range(M):
+            # partial derivative of the log-likelihood with respect to variance components
+            # Equation 27.33 of textbook
+            dL = -0.5*np.trace(P @ Vs_i[i]) + 0.5*(y.T @ P @ Vs_i[i] @ P @ y)
+            dLs[i] = dL
+
+            # Hessian matrix (second derivatives)
+            for j in range(M):
+                if i > j:
+                    continue # skips double computation
+                # Equation 27.34 of textbook
+                H_ij = 0.5 * np.trace(P @ Vs_i[i] @ P @ Vs_i[j])
+                if method == 'NR':
+                    # Newton-Raphson method
+                    H_ij += y.T @ P @ Vs_i[i] @ P @ Vs_i[j] @ P @ y
+                H[i, j] = H_ij 
+                H[j, i] = H_ij # symmetric matrix
+
+        #print(dLs)
+        #print(H)
+        # computes offset for parameter estimates
+        # Equation 27.32 of textbook
+        offsets = np.linalg.pinv(H) @ dLs # pinv for numerical stability
+        # updates parameter estimates
+        vars_i += offsets
+        vars_i = np.maximum(vars_i, 1e-6) # ensures variance components are positive
+
+        for i in range(M):
+            if verbose and i < M - 1:  # don't print for residual variance component
+                print(f"Iteration {iter+1}, Random Effect {i+1}: Updated variance component = {vars_i[i]:.6f}, Offset = {offsets[i]:.6f}")
+
+        # check convergence
+        if np.max(np.abs(offsets)) < tol:
+            print(f"Converged after {iter+1} iterations.")
+            break
+        if iter == max_iter - 1:
+            print(f"Reached maximum iterations ({max_iter}) without convergence.")
+            break
+    
+    return vars_i
