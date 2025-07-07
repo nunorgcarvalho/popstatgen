@@ -101,6 +101,7 @@ def get_standardized_effects(effects: np.ndarray, G_std: np.ndarray, std2allelic
 #### Heritability Estimation ####
 #################################
 
+#### Haseman-Elston Methods ####
 def run_HE_regression(A: np.ndarray, y:np.ndarray, se: str = 'jackknife') -> Union[float, Tuple[float, float]]:
     '''
     Performs Haseman-Elston regression to estimate heritability.
@@ -111,6 +112,7 @@ def run_HE_regression(A: np.ndarray, y:np.ndarray, se: str = 'jackknife') -> Uni
         h2g_HE (float): Estimated heritability from Haseman-Elston regression.
         h2g_HE_se (float): Standard error of the heritability estimate if `se` is 'jackknife'. Otherwise, this value is not returned.
     '''
+    # implementation based on Slide 66 of Week 8 of Alkes Price's EPI 511 course lectures
     y = (y - y.mean()) / y.std() # standardizes trait values
     N = A.shape[0]
     numerator = []
@@ -202,3 +204,99 @@ def plot_HE_regression(A: np.ndarray, y: np.ndarray, bins: int = 5) -> None:
     plt.ylabel('Squared difference in trait values')
     plt.title('Haseman-Elston Regression')
     plt.show()
+
+#### REstricted Maximum Likelihood (REML) Methods ####
+
+def run_REML_EM(y: np.ndarray, X: np.ndarray, Zs: list[np.ndarray], Bs: list[np.ndarray], init: list[float],
+                tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> Tuple[np.ndarray, np.ndarray, float]:
+    '''
+    Runs REML using the EM algorithm to estimate variance components.
+    Parameters:
+        y (1D array): N-length array of trait values. Should be standardized (?).
+        X (2D array): N*K design matrix of fixed effects covariates. Set to None if no fixed effects.
+        Zs (list of 2D arrays): List containing M random effects design matrices that are N*N_i. Don't include residual matrix.
+        Bs (list of 1D arrays): List containing M random effects covariance matrices that are N_i*N_i. Don't include residual matrix.
+        init (list): M-length list with initial guess for the variance components.
+        tol (float): Tolerance for convergence. Default is 1e-5.
+        max_iter (int): Maximum number of iterations. Default is 1000.
+        verbose (bool): If True, prints convergence information. Default is True.
+    Returns:
+        Tuple containing:
+            - var_components (1D array): Estimated variance components, the last of which is the residual variance.
+            - beta (1D array): Estimated fixed effect coefficients.
+            - log_likelihood (float): Log-likelihood of the model at convergence.
+    '''
+    # Based on pg 797 of Bruce Walsh and Michael Lynch's "Genetics and Analysis of Quantitative Traits" (1998)
+    N = y.shape[0] # number of individuals
+    y = (y - y.mean()) / y.std()  # standardizes y to have mean 0 and variance 1
+
+    # adds residual matrix to Zs and Bs and initial guess
+    Zs.append(np.identity(N))  # residual design matrix (identity)
+    Bs.append(np.identity(N)) # residual covariance matrix (identity)
+    init_resid = y.var() - np.sum(init)
+    if init_resid < 0:
+        raise ValueError("Initial guesses for variance components exceed total variance of y.")
+    init.append(init_resid)  # initial guess for residual variance component
+
+    M = len(Zs)  # number of random effects (technically M+1, since we added the residual matrix)
+    N_i = [Z.shape[1] for Z in Zs]  # number of clusters in each random effect
+
+    vars_i = np.array(init)  # initial variance components
+    for iter in range(max_iter):
+        # V matrix
+        Vs_i = [Zs[i] @ Bs[i] @ Zs[i].T for i in range(M)]
+        V = sum(vars_i[i] * Vs_i[i] for i in range(M))  # total variance matrix
+        V_inv = np.linalg.inv(V)
+        # P matrix
+        if X is None:
+            P = V_inv
+        else:
+            P = V_inv - V_inv @ X @ np.linalg.inv(X.T @ V_inv @ X) @ X.T @ V_inv
+
+        offsets = np.zeros(M)  # offsets for each random effect
+        for i in range(M):
+            var_i = vars_i[i] # variance component            
+            V_i = Vs_i[i] # category-specific variance matrix
+
+            # E-step: compute expected values of random effects given current estimates
+            offset = var_i**2 * ( y.T @ P @ V_i @ P @ y - np.trace(P @ V_i)) / N_i[i]
+            offsets[i] = offset
+
+            # M-step: update variance components
+            vars_i[i] = var_i + offset
+
+            if verbose and i < M - 1:  # don't print for residual variance component
+                print(f"Iteration {iter+1}, Random Effect {i+1}: Updated variance component = {vars_i[i]:.6f}, Offset = {offset:.6f}")
+        
+        # check convergence
+        if np.max(np.abs(offsets)) < tol:
+            print(f"Converged after {iter+1} iterations.")
+            break
+
+        if iter == max_iter - 1:
+            print(f"Reached maximum iterations ({max_iter}) without convergence.")
+            break
+    
+    # final V matrix
+    Vs_i = [Zs[i] @ Bs[i] @ Zs[i].T for i in range(M)]
+    V = sum(vars_i[i] * Vs_i[i] for i in range(M))  # total variance matrix
+    V_inv = np.linalg.inv(V)
+
+    # fixed effect estimation
+    if X is None:
+        beta = None
+        XB = np.zeros(N)
+    else:
+        beta = np.linalg.inv(X.T @ V_inv @ X) @ (X.T @ V_inv @ y)
+        XB = X @ beta
+
+    # log-likelihood calculation
+    LL = -0.5*N*np.log(2 * np.pi) - 0.5*np.log(np.linalg.det(V)) - 0.5*(y - XB).T @ V_inv @ (y - XB)
+
+    # returns
+    return vars_i, beta, LL.item()  # .item() to convert single-element array to float
+
+
+            
+            
+
