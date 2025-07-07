@@ -7,6 +7,7 @@ The functions here contain the documentation for the arguments and return values
 
 # imports
 import numpy as np
+from typing import Tuple, Union
 
 ##########################
 #### Trait generation ####
@@ -95,7 +96,7 @@ def get_standardized_effects(effects: np.ndarray, G_std: np.ndarray, std2allelic
             effects_output = effects * G_std # per-standardized-allele effects
         return effects_output
 
-def run_HE_regression(A: np.ndarray, y:np.ndarray):
+def run_HE_regression(A: np.ndarray, y:np.ndarray, se: str = 'jackknife') -> Union[float, Tuple[float, float]]:
     '''
     Performs Haseman-Elston regression to estimate heritability.
     Parameters:
@@ -106,12 +107,40 @@ def run_HE_regression(A: np.ndarray, y:np.ndarray):
     N = A.shape[0]
     numerator = []
     denominator = []
+    jk_indices = [[] for _ in range(N)]
+    jk=0 # pair index
     for j in range(N):
         for k in range(N):
             if j >= k: # since matrix is symmetrical along diagonal
                 continue
             numerator.append( A[j,k] * y[j] * y[k] )
             denominator.append( A[j,k]**2 )
+            # keeps track of individual pairs for jackknife
+            if se == 'jackknife':
+                jk_indices[j].append(jk)
+                jk_indices[k].append(jk)
+                jk += 1
     # computes h2
-    h2g_HE = sum(numerator) / sum(denominator)
-    return h2g_HE
+    sum_numerator = sum(numerator)
+    sum_denominator = sum(denominator)
+    h2g_HE = sum_numerator / sum_denominator
+
+    # computes standard error if requested
+    if se == 'jackknife':
+        h2_jackknife = []
+        for j in range(N):
+            # compute sum of num/denom for the the pairs containing individual j
+            j_num = sum(numerator[i] for i in jk_indices[j])
+            j_denom = sum(denominator[i] for i in jk_indices[j])
+            # subtracts out individual j's contribution to the numerator and denominator
+            num_minus_j = sum_numerator - j_num
+            denom_minus_j = sum_denominator - j_denom
+            # recomputes h2 without individual j
+            h2_jackknife.append(num_minus_j / denom_minus_j)
+        # computes standard error of h2 using jackknife
+        h2_jackknife = np.array(h2_jackknife)
+        h2_jackknife_mean = h2_jackknife.mean()
+        h2g_HE_se = np.sqrt( ((N-1) / N) * sum((h2_jackknife - h2_jackknife_mean)**2))
+        return h2g_HE, h2g_HE_se
+    else:
+        return h2g_HE

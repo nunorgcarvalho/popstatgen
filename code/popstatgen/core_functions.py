@@ -5,6 +5,8 @@ This file contains core functions used by other modules in the popstatgen packag
 # imports
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.stats import norm
+from typing import Tuple
 
 #######################
 #### Miscellaneous ####
@@ -46,6 +48,21 @@ def get_pop_kwargs(i, **kwargs) -> dict:
         else:
             pop_kwargs[key] = value
     return pop_kwargs
+
+def report_CI(point_and_se: Tuple[float, float], CI: float = 0.95) -> str:
+    '''
+    Returns a string with the point estimate and confidence interval.
+    Parameters:
+        point_and_se (list): Tuple containing the point estimate and standard error (point, se).
+        CI (float): Confidence level. Default is 0.95.
+    Returns:
+        report (str): String with the point estimate and confidence interval.
+    '''
+    (point, se) = point_and_se
+    z = norm.ppf((1 + CI) / 2)  # z-score for the given confidence level
+    lower = point - z * se
+    upper = point + z * se
+    return f'{point:.3f} [{lower:.3f}, {upper:.3f}]'
 
 #######################
 #### Visualization ####
