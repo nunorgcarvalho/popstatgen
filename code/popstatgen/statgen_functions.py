@@ -225,10 +225,14 @@ def run_REML(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None],
         max_iter (int): Maximum number of iterations. Default is 1000.
         verbose (bool): If True, prints convergence information per iteration. Default is True.
     Returns:
-        Tuple containing:
-            - var_components (1D array): Estimated variance components, the last of which is the residual variance.
-            - beta (1D array): Estimated fixed effect coefficients.
-            - log_likelihood (float): Log-likelihood of the model at convergence.
+        output (dict): Dictionary containing the following keys:
+            - 'var_components': Estimated variance components for each random effect, including residual.
+            - 'var_components_se': Standard errors of the variance components.
+            - 'var_components_vcov': Variance-covariance matrix of the variance components
+            - 'fixed_effects': Estimated fixed effects coefficients (beta). If X is None, this is None.
+            - 'fixed_effects_se': Standard errors of the fixed effects coefficients. If X is None, this is None.
+            - 'fixed_effects_vcov': Variance-covariance matrix of the fixed effects. If X is None, this is None.
+            - 'log_likelihood': Log-likelihood of the model.
     '''
     N = y.shape[0] # number of individuals
     y = (y - y.mean()) / y.std()  # standardizes y to have mean 0 and variance 1
@@ -252,65 +256,87 @@ def run_REML(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None],
             raise ValueError("Initial guesses for variance components exceed total variance of y.")
         init.append(init_resid)  # initial guess for residual variance component
 
+    # gets variance matrices
+    M = len(Zs)
+    Vs_i = [Zs[i] @ Bs[i] @ Zs[i].T for i in range(M)]
+
     if method == 'EM':
-        vars_i = _run_REML_EM(y, Bs, Zs, X, init, tol, max_iter, verbose)
+        N_i = [Z.shape[1] for Z in Zs] # number of clusters in each random effect
+        vars_i = _run_REML_EM(y, Vs_i, N_i, X, init, tol, max_iter, verbose)
     elif method in ['NR', 'FS']:
-        vars_i = _run_REML_NRFS(y, Bs, Zs, X, init, method=method, tol=tol, max_iter=max_iter, verbose=verbose)
+        vars_i = _run_REML_NRFS(y, Vs_i, X, init, method=method, tol=tol, max_iter=max_iter, verbose=verbose)
     else:
         raise ValueError(f"Method '{method}' is not implemented. See documentation.")
 
     # final V matrix after convergence
-    (_, V, V_inv) = _get_V_components(Zs, Bs, vars_i)  # computes Vs_i, V, and V_inv
-    #return V, V_inv
+    (V, V_inv) = _get_V_components(Vs_i, vars_i)  # computes V, and V_inv
+
+    # gets variance-covariance matrix for variance components
+    P = _get_P_matrix(V_inv, X)  # computes P matrix
+    F = _get_F_matrix(P, Vs_i)  # computes Fisher's Information Matrix (expected Hessian)
+    F_inv = np.linalg.pinv(F)  # inverse of Fisher's Information Matrix
+    # computes standard errors of variance components
+    vars_i_se = np.sqrt(np.diag(F_inv))  # inverse
 
     # fixed effect estimation
     if X is None:
         beta = None
+        beta_vcov = None
+        beta_se = None
         XB = np.zeros(N)
     else:
         beta = np.linalg.inv(X.T @ V_inv @ X) @ (X.T @ V_inv @ y)
         XB = X @ beta
+        # gets variance-covariance matrix for fixed effects
+        beta_vcov = np.linalg.inv(X.T @ V_inv @ X) # Equation 27.23
+        beta_se = np.sqrt(np.diag(beta_vcov))  # standard errors of fixed effects
+    
 
     # log-likelihood calculation
     logdetV = 2 * np.sum(np.log(np.diag(np.linalg.cholesky(V)))) # for numerical stability
-    #LL = -0.5*N*np.log(2 * np.pi) - 0.5*np.log(np.linalg.det(V)) - 0.5*(y - XB).T @ V_inv @ (y - XB)
     LL = -0.5*N*np.log(2 * np.pi) - 0.5*logdetV - 0.5*(y - XB).T @ V_inv @ (y - XB)
 
     # returns
-    return vars_i, beta, LL.item()  # .item() to convert single-element array to float
+    output = {
+        'var_components': vars_i,
+        'var_components_se': vars_i_se,
+        'var_components_vcov': F_inv,
+        'fixed_effects': beta,
+        'fixed_effects_se': beta_se,
+        'fixed_effects_vcov': beta_vcov,
+        'log_likelihood': LL.item(),  # .item() to convert single-element array to float
+    }
+    return output
 
-def _get_V_components(Zs: list[np.ndarray], Bs: list[np.ndarray], vars_i: np.ndarray,
+def _get_V_components(Vs_i: list[np.ndarray], vars_i: np.ndarray,
                       jitter = 1e-6) -> np.ndarray:
     '''
     Computes the total variance matrix V from the random effects design matrices and covariance matrices.
     Parameters:
-        Zs (list of 2D arrays): List containing M random effects design matrices that are N*N_i.
-        Bs (list of 2D arrays): List containing M random effects covariance matrices that are N_i*N_i.
+        Vs_i (list of 2D arrays): List of M category-specific variance N*N matrices.
         vars_i (1D array): Estimated variance components for each random effect.
         jitter (float): Small value added to diagonal of variance matrices to ensure positive definiteness. Default is 1e-6.
     Returns:
-        tuple (Vs_i, V, V_inv):
+        tuple (V, V_inv):
         Where:
-        - Vs_i (list of 2D arrays): List of M category-specific variance matrices.
         - V (2D array): Total variance matrix.
         - V_inv (2D array): Inverse of the total variance matrix.
     '''
-    M = len(Zs)
-    Vs_i = [Zs[i] @ Bs[i] @ Zs[i].T for i in range(M)]
+    M = len(Vs_i)
     V = sum(vars_i[i] * Vs_i[i] for i in range(M))  # total variance matrix
     if jitter > 0:
         V += np.eye(V.shape[0]) * jitter # adds jitter to diagonal for numerical stability
     V_inv = np.linalg.inv(V)
-    return (Vs_i, V, V_inv)
+    return (V, V_inv)
 
 def _get_P_matrix(V_inv: np.ndarray, X: np.ndarray = None) -> np.ndarray:
     '''
     Computes the P matrix used in REML estimation.
     Parameters:
-        V_inv (2D array): Inverse of the total variance matrix.
+        V_inv (2D array): Inverse of the total variance N*N matrix.
         X (2D array): N*K design matrix of fixed effects covariates. If None, P is just V_inv.
     Returns:
-        P (2D array): The P matrix used in REML estimation.
+        P (2D array): The N*N P matrix used in REML estimation.
     '''
     if X is None:
         P = V_inv
@@ -318,21 +344,40 @@ def _get_P_matrix(V_inv: np.ndarray, X: np.ndarray = None) -> np.ndarray:
         P = V_inv - V_inv @ X @ np.linalg.inv(X.T @ V_inv @ X) @ X.T @ V_inv
     return P
 
-def _run_REML_EM(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None], X: np.ndarray = None, init: list[float] = None,
+def _get_F_matrix(P: np.ndarray, Vs_i: list[np.ndarray]) -> np.ndarray:
+    '''
+    Computes Fisher's Information Matrix used in REML estimation. Its inverse is also used to compute the standard errors of the variance component estimates.
+    Parameters:
+        P (2D array): The N*N P matrix used in REML estimation.
+        Vs_i (list of 2D arrays): List of M category-specific variance N*N matrices.
+    Returns:
+        F (2D array): The N*N F matrix used in REML estimation.
+    '''
+    M = len(Vs_i)
+    F = np.zeros((M, M))
+    for i in range(M):
+        for j in range(M):
+                if i > j:
+                    continue # skips double computation
+                # Equation 27.35b of textbook
+                F_ij = 0.5 * np.trace(P @ Vs_i[i] @ P @ Vs_i[j])
+                F[i, j] = F_ij 
+                F[j, i] = F_ij # symmetric matrix
+    return F
+
+def _run_REML_EM(y: np.ndarray, Vs_i: list[np.ndarray], N_i: list[int] = [None], X: np.ndarray = None, init: list[float] = None,
                  tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> np.ndarray:
     '''
     Runs REML using the Expectation-Maximization (EM) algorithm to estimate variance components. See `run_REML` for parameter descriptions. Returns variane components.
     '''
     # Based on pg 797 of Bruce Walsh and Michael Lynch's "Genetics and Analysis of Quantitative Traits" (1998)
     
-    M = len(Zs) # number of random effects (technically M+1, since we added the residual matrix)
-    N_i = [Z.shape[1] for Z in Zs] # number of clusters in each random effect
+    M = len(Vs_i) # number of random effects (technically M+1, since we added the residual matrix)
     vars_i = np.array(init) # initial variance components
 
     for iter in range(max_iter):
         # V matrix
-        (Vs_i, V, V_inv) = _get_V_components(Zs, Bs, vars_i)  # computes Vs_i, V, and V_inv
-        print(np.linalg.det(V))
+        (_, V_inv) = _get_V_components(Vs_i, vars_i)  # computes V, and V_inv
         # P matrix
         P = _get_P_matrix(V_inv, X)  # computes P matrix
 
@@ -364,7 +409,7 @@ def _run_REML_EM(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [No
 
     return vars_i
 
-def _run_REML_NRFS(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None], X: np.ndarray = None, init: list[float] = None,
+def _run_REML_NRFS(y: np.ndarray, Vs_i: list[np.ndarray], X: np.ndarray = None, init: list[float] = None,
                    method: str = 'FS', tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> np.ndarray:
             
     '''
@@ -372,37 +417,36 @@ def _run_REML_NRFS(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [
     '''
     # Based on pg 794 of Bruce Walsh and Michael Lynch's "Genetics and Analysis of Quantitative Traits" (1998)
 
-    M = len(Zs) # number of random effects (technically M+1, since we added the residual matrix)
-    N_i = [Z.shape[1] for Z in Zs] # number of clusters in each random effect
+    M = len(Vs_i) # number of random effects (technically M+1, since we added the residual matrix)
     vars_i = np.array(init) # initial variance components
     for iter in range(max_iter):
         # V matrix
-        (Vs_i, V, V_inv) = _get_V_components(Zs, Bs, vars_i)  # computes Vs_i, V, and V_inv
+        (_, V_inv) = _get_V_components(Vs_i, vars_i)  # computes V, and V_inv
         # P matrix
         P = _get_P_matrix(V_inv, X)  # computes P matrix
 
+        # partial derivative of the log-likelihood with respect to variance components
         dLs = np.zeros(M)
-        H = np.zeros((M, M))
         for i in range(M):
-            # partial derivative of the log-likelihood with respect to variance components
             # Equation 27.33 of textbook
             dL = -0.5*np.trace(P @ Vs_i[i]) + 0.5*(y.T @ P @ Vs_i[i] @ P @ y)
             dLs[i] = dL
+        
+        # Hessian Matrix (second derivative of the log-likelihood)
+        H = _get_F_matrix(P, Vs_i)  # computes Fisher's Information Matrix (expected Hessian)
+        # computes the second term of the Hessian matrix if NR method is used
+        if method == 'NR':
+            for i in range(M):
+                for j in range(M):
+                    if i > j:
+                        continue # skips double computation
+                    # Equation 27.34 of textbook (second term)
+                    H_ij_term2 = y.T @ P @ Vs_i[i] @ P @ Vs_i[j] @ P @ y
+                    H[i, j] -= H_ij_term2 
+                    H[j, i] -= H_ij_term2 # symmetric matrix
+            # negates Hessian for NR method
+            H = -1 * H
 
-            # Hessian matrix (second derivatives)
-            for j in range(M):
-                if i > j:
-                    continue # skips double computation
-                # Equation 27.34 of textbook
-                H_ij = 0.5 * np.trace(P @ Vs_i[i] @ P @ Vs_i[j])
-                if method == 'NR':
-                    # Newton-Raphson method
-                    H_ij += y.T @ P @ Vs_i[i] @ P @ Vs_i[j] @ P @ y
-                H[i, j] = H_ij 
-                H[j, i] = H_ij # symmetric matrix
-
-        #print(dLs)
-        #print(H)
         # computes offset for parameter estimates
         # Equation 27.32 of textbook
         offsets = np.linalg.pinv(H) @ dLs # pinv for numerical stability
