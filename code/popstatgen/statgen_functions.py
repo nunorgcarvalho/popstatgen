@@ -220,7 +220,8 @@ def run_REML(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None],
         method (str): Method to use for REML estimation. Options are:
             - 'EM': Expectation-Maximization algorithm (default). Slow but stable.
             - 'NR': Newton-Raphson algorithm. Faster than EM.
-            - 'FS': Fisher Scoring algorithm (similar to NR). Even faster than NR.
+            - 'FS': Fisher Scoring algorithm (similar to NR). Even faster than NR, but perhaps less stable.
+            - 'AI': Average Information algorithm (similar to NR). Even faster than FS and more stable. Used by GCTA.
         tol (float): Tolerance for convergence. Default is 1e-5.
         max_iter (int): Maximum number of iterations. Default is 1000.
         verbose (bool): If True, prints convergence information per iteration. Default is True.
@@ -263,7 +264,7 @@ def run_REML(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None],
     if method == 'EM':
         N_i = [Z.shape[1] for Z in Zs] # number of clusters in each random effect
         vars_i = _run_REML_EM(y, Vs_i, N_i, X, init, tol, max_iter, verbose)
-    elif method in ['NR', 'FS']:
+    elif method in ['NR', 'FS', 'AI']:
         vars_i = _run_REML_NRFS(y, Vs_i, X, init, method=method, tol=tol, max_iter=max_iter, verbose=verbose)
     else:
         raise ValueError(f"Method '{method}' is not implemented. See documentation.")
@@ -346,7 +347,7 @@ def _get_P_matrix(V_inv: np.ndarray, X: np.ndarray = None) -> np.ndarray:
 
 def _get_F_matrix(P: np.ndarray, Vs_i: list[np.ndarray]) -> np.ndarray:
     '''
-    Computes Fisher's Information Matrix used in REML estimation. Its inverse is also used to compute the standard errors of the variance component estimates.
+    Computes Fisher's Information Matrix used in REML estimation. Its inverse is also used to compute the standard errors of the variance component estimates. It is the information matrix used under the Fisher Scoring REML method.
     Parameters:
         P (2D array): The N*N P matrix used in REML estimation.
         Vs_i (list of 2D arrays): List of M category-specific variance N*N matrices.
@@ -364,6 +365,28 @@ def _get_F_matrix(P: np.ndarray, Vs_i: list[np.ndarray]) -> np.ndarray:
                 F[i, j] = F_ij 
                 F[j, i] = F_ij # symmetric matrix
     return F
+
+def _get_AI_matrix(P: np.ndarray, Vs_i: list[np.ndarray], y: np.ndarray) -> np.ndarray:
+    '''
+    Computes the AI matrix used in REML estimation. It is the information matrix used under the AI REML method.
+    Parameters:
+        P (2D array): The N*N P matrix used in REML estimation.
+        Vs_i (list of 2D arrays): List of M category-specific variance N*N matrices.
+        y (1D array): N-length array of trait values.
+    Returns:
+        AI (2D array): The N*N AI matrix used in REML estimation.
+    '''
+    M = len(Vs_i)
+    AI = np.zeros((M, M))
+    for i in range(M):
+        for j in range(M):
+            if i > j:
+                continue # skips double computation
+            # Equation 27.34 of textbook (second term, but halved)
+            AI_ij = y.T @ P @ Vs_i[i] @ P @ Vs_i[j] @ P @ y
+            AI[i, j] = AI_ij 
+            AI[j, i] = AI_ij # symmetric matrix
+    return AI
 
 def _run_REML_EM(y: np.ndarray, Vs_i: list[np.ndarray], N_i: list[int] = [None], X: np.ndarray = None, init: list[float] = None,
                  tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> np.ndarray:
@@ -425,27 +448,44 @@ def _run_REML_NRFS(y: np.ndarray, Vs_i: list[np.ndarray], X: np.ndarray = None, 
         # P matrix
         P = _get_P_matrix(V_inv, X)  # computes P matrix
 
-        # partial derivative of the log-likelihood with respect to variance components
+        # Score Matrix (gradient of the log-likelihood)
         dLs = np.zeros(M)
         for i in range(M):
             # Equation 27.33 of textbook
             dL = -0.5*np.trace(P @ Vs_i[i]) + 0.5*(y.T @ P @ Vs_i[i] @ P @ y)
             dLs[i] = dL
         
-        # Hessian Matrix (second derivative of the log-likelihood)
-        H = _get_F_matrix(P, Vs_i)  # computes Fisher's Information Matrix (expected Hessian)
-        # computes the second term of the Hessian matrix if NR method is used
-        if method == 'NR':
-            for i in range(M):
-                for j in range(M):
-                    if i > j:
-                        continue # skips double computation
-                    # Equation 27.34 of textbook (second term)
-                    H_ij_term2 = y.T @ P @ Vs_i[i] @ P @ Vs_i[j] @ P @ y
-                    H[i, j] -= H_ij_term2 
-                    H[j, i] -= H_ij_term2 # symmetric matrix
-            # negates Hessian for NR method
-            H = -1 * H
+        # Information Matrix (second derivative of the log-likelihood)
+        if method in ['NR', 'FS']:
+            # this is the expected Hessian matrix (Fisher's Information Matrix)
+            I_exp = _get_F_matrix(P, Vs_i)
+        if method in ['NR','AI']:
+            # this is the average of the expected and observed Hessian matrices
+            I_avg = _get_AI_matrix(P, Vs_i, y)
+        if method == 'FS':
+            # Fisher Scoring method uses the expected Hessian
+            H = I_exp
+        elif method == 'AI':
+            # AI method uses the average of the expected and observed Hessian
+            H = I_avg
+        elif method == 'NR':
+            # Newton-Raphson method uses the observed Hessian
+            H = -1 * (I_exp - 2*I_avg)
+
+        # # Hessian Matrix (second derivative of the log-likelihood)
+        # H = _get_F_matrix(P, Vs_i)  # computes Fisher's Information Matrix (expected Hessian)
+        # # computes the second term of the Hessian matrix if NR method is used
+        # if method == 'NR':
+        #     for i in range(M):
+        #         for j in range(M):
+        #             if i > j:
+        #                 continue # skips double computation
+        #             # Equation 27.34 of textbook (second term)
+        #             H_ij_term2 = y.T @ P @ Vs_i[i] @ P @ Vs_i[j] @ P @ y
+        #             H[i, j] -= H_ij_term2 
+        #             H[j, i] -= H_ij_term2 # symmetric matrix
+        #     # negates Hessian for NR method
+        #     H = -1 * H
 
         # computes offset for parameter estimates
         # Equation 27.32 of textbook
