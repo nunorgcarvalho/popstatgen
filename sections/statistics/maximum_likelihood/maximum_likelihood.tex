@@ -44,7 +44,7 @@ Because logarithms are a monotonic function, it means that whatever parameter va
 
 \subsubsection{Example of the likelihood of a function}
 (Adapted from Example 1 of Appendix 4 of [Lynch \& Walsh, 1998]).
-Let's say we have $N=3$ data points: $\by = [y_1,y_2,y_3]$, which we believe were generated from some normal distribution with a variance of $\sigma^2 = 1$ but an unknown mean.
+Let's say we have $N$ data points: $\by = [y_1,y_2, ..., y_N]$, which we believe were generated from some normal distribution with a variance of $\sigma^2 = 1$ but an unknown mean.
 We know the probability density function (PDF) for a normal distribution, which is a function of the mean $\mu$ and variance $\sigma$.
 $$
 \Pr(y_i, \mu, \sigma) = 
@@ -57,19 +57,48 @@ In our case, we know $\sigma = 1$ and we also observe the data $\by$.
 What we don't know is the mean, $\mu$, which is the only non-fixed parameter.
 We can plug in our known parameter $\sigma$, compute the product of the PDF for all our data points, and take the logarithm.
 This results in a log-likelihood function that describes how well an inputted $\mu$ value explains our observed data:
-\begin{align*}
-\mathrm{L}(\mu | \by) &= - \frac{n}{2} \ln(2 \pi) -
-\frac{1}{2} \sum_i^{N=3} (y_i - \mu)^2 \\
-&= -\frac{n}{2} \ln(2 \pi) -
-\frac{1}{2} (
-    (y_1 - \mu)^2 + (y_2 - \mu)^2 + (y_3 - \mu)^2
-)
-\end{align*}
+$$
+\LL(\mu | \by) = - \frac{n}{2} \ln(2 \pi) -
+\frac{1}{2} \sum_i^{N} (y_i - \mu)^2
+$$
 
 \subsection{Maximum Likelihood Estimation}
 Once we have described the likelihood of some set of parameter values given our observed data, we can then ask the question:
 What set of parameter values maximizes the likelihood of our data?
 The rationale is that if we want to estimate these unknown parameters, our best bet for a single point estimate is the combination of parameter values that are most likely to produce the observed data.
 The set of parameter values $\hat{\bTheta}$ that maximizes the likelihood of our observed data is called the \textbf{maximum likelihood estimate (MLE)}.
+
+From calculus, we know that the maximum of a multivariable function can be identified by taking the partial derivatives of the function with respect to each parameter and then solving for the parameter values that make them equal to zero. We define this first partial derivative of a log-likelihood function to be the \textbf{Score} ($S$) of the likelihood function:
+$$
+S(\bTheta) =
+\frac{ \partial \LL (\bTheta)
+}{ \partial \bTheta }
+$$
+Note that if $\bTheta$ is a vector of $M$ parameters, then $S(\bTheta)$ is also a vector of length $M$.
+The MLE, $\hat{\bTheta}$, is therefore the solution to the following:
+$$ S(\hat{\bTheta}) = 0 $$
+
+\subsubsection{Example of the MLE of a function}
+Continuing the previous example, we can compute the score of the likelihood function, which in this case is just a single derivative:
+\begin{align*}
+S(\mu) &=
+\frac{ \partial \LL (\mu)
+}{ \partial \mu } \\
+&= \frac{ \partial }{ \partial \mu } [
+- \frac{n}{2} \ln(2 \pi) -
+\frac{1}{2} \sum_i^{N} (y_i - \mu)^2 ] \\
+&= \frac{ \partial }{ \partial \mu } [
+- \frac{n}{2} \ln(2 \pi) -
+\frac{1}{2} \sum_i^{N} (y_i^2 - 2 y_i \mu + \mu^2) ] \\
+&= - \frac{1}{2} \sum_i^{N} (- 2 y_i + 2 \mu) \\
+&= N ( \bar{y} - \mu)
+\end{align*}
+where $\bar{y} = \frac{1}{N} \sum_i^N (y_i) $ (i.e. the sample mean). We now set $S(\hat{\mu}) = 0$ and solve:
+\begin{align*}
+0 &= S(\hat{\mu}) \\
+&= N ( \bar{y} - \hat{\mu})
+\end{align*}
+The solution is: $\hat{\mu} = \bar{y} = \frac{1}{N} \sum_i^N (y_i)$.
+Matching our intuitions, the mean parameter that maximizes the likelihood of our data is the arithmetic mean of our data sample.
 
 \end{document}
