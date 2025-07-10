@@ -154,6 +154,22 @@ The i\sps{th} diagonal element is the variance of the MLE for the i\sps{th} para
 The element (i,j) is the covariance of the MLE for the i\sps{th} and j\sps{th} parameters.
 %If our observed data produces a Hessian whose negative expected value matches the Fisher information matrix, then the negative inverse of the Hessian also works.
 
+\section{Restricted Maximum Likelihood (REML)}
+\% To do
 
+\section{Methods of solving for the MLE}
+In practice, solving for the set of parameters that makes the score of the likelihood function equal to zero is very difficult.
+Instead, there are algorithms that start with a guess for the parameter estimates, and then iteratively move closer and closer to the parameter values that maximize the likelihood of the observed data.
+Eventually, the algorithm gets close enough to the MLE that the parameter estimate at each iteration no longer changes by much, and thus we decide on a cutoff point where we declare that the algorithm has converged on the MLE.
+
+Broadly, the strategy of these methods is to randomly choose (or have the user specificy) a location in the parameter landscape, where the height of the landscape at that set of parameter values is the log-likelihood of those values generating the observed data.
+The algorithm can't look very far from its position with confidence, but it can look at how the landscape height (the log-likelihood function) changes at its location.
+This can be simply the rate of change (first derivative) or also the curvature (second derivative).
+It then uses this information to predict the direction and distance of where the the landscape height should reach its maximum (the MLE) and goes to it.
+In the first few iterations, it's likely that this new predicted MLE location turns out to not explain the data very well, since the landscape is not flat at that location.
+The algorithm  repeats this jumping procedure until it is no longer moving very much between its prediction for how the landscape changes around the true peak has become pretty accurate.
+
+Note, however, if there are local maxima (peaks in the likelihood landscape that are not the tallest in the entire landscape), the algorithm may fail to converge on the true parameter values.
+By re-running the algorithm under multiple starting spots, one can usually avoid this.
 
 \end{document}
