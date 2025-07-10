@@ -68,20 +68,20 @@ What set of parameter values maximizes the likelihood of our data?
 The rationale is that if we want to estimate these unknown parameters, our best bet for a single point estimate is the combination of parameter values that are most likely to produce the observed data.
 The set of parameter values $\hat{\bTheta}$ that maximizes the likelihood of our observed data is called the \textbf{maximum likelihood estimate (MLE)}.
 
-From calculus, we know that the maximum of a multivariable function can be identified by taking the partial derivatives of the function with respect to each parameter and then solving for the parameter values that make them equal to zero. We define this first partial derivative of a log-likelihood function to be the \textbf{Score} ($S$) of the likelihood function:
+From calculus, we know that the maximum of a multivariable function can be identified by taking the partial derivatives of the function with respect to each parameter and then solving for the parameter values that make them equal to zero. We define this first partial derivative of a log-likelihood function to be the \textbf{Score} ($\bS$) of the likelihood function:
 $$
-S(\bTheta) =
+\bS(\bTheta) =
 \frac{ \partial \LL (\bTheta)
 }{ \partial \bTheta }
 $$
-Note that if $\bTheta$ is a vector of $M$ parameters, then $S(\bTheta)$ is also a vector of length $M$.
+Note that if $\bTheta$ is a vector of $M$ parameters, then $\bS(\bTheta)$ is also a vector of length $M$.
 The MLE, $\hat{\bTheta}$, is therefore the solution to the following:
-$$ S(\hat{\bTheta}) = 0 $$
+$$ \bS(\hat{\bTheta}) = 0 $$
 
 \subsubsection{Example of the MLE of a function}
 Continuing the previous example, we can compute the score of the likelihood function, which in this case is just a single derivative:
 \begin{align*}
-S(\mu) &=
+\bS(\mu) &=
 \frac{ \partial \LL (\mu)
 }{ \partial \mu } \\
 &= \frac{ \partial }{ \partial \mu } [
@@ -93,9 +93,9 @@ S(\mu) &=
 &= - \frac{1}{2} \sum_i^{N} (- 2 y_i + 2 \mu) \\
 &= N ( \bar{y} - \mu)
 \end{align*}
-where $\bar{y} = \frac{1}{N} \sum_i^N (y_i) $ (i.e. the sample mean). We now set $S(\hat{\mu}) = 0$ and solve:
+where $\bar{y} = \frac{1}{N} \sum_i^N (y_i) $ (i.e. the sample mean). We now set $\bS(\hat{\mu}) = 0$ and solve:
 \begin{align*}
-0 &= S(\hat{\mu}) \\
+0 &= \bS(\hat{\mu}) \\
 &= N ( \bar{y} - \hat{\mu})
 \end{align*}
 The solution is: $\hat{\mu} = \bar{y} = \frac{1}{N} \sum_i^N (y_i)$.
@@ -169,7 +169,51 @@ It then uses this information to predict the direction and distance of where the
 In the first few iterations, it's likely that this new predicted MLE location turns out to not explain the data very well, since the landscape is not flat at that location.
 The algorithm  repeats this jumping procedure until it is no longer moving very much between its prediction for how the landscape changes around the true peak has become pretty accurate.
 
-Note, however, if there are local maxima (peaks in the likelihood landscape that are not the tallest in the entire landscape), the algorithm may fail to converge on the true parameter values.
+Note, however, if there are local maxima (peaks in the likelihood landscape that are not the tallest in the entire landscape), the algorithm may fail to converge on the true parameter values, instead converging on said local maxima.
 By re-running the algorithm under multiple starting spots, one can usually avoid this.
+
+\subsection{Quadratic iterative methods}
+From calculus, we know that a function can be approximated around some point through a Taylor series expansion:
+$$
+f(x) \approx f(x_0) + f'(x_0)(x - x_0) + \frac{1}{2} f''(x_0)(x - x_0)^2 + ... + \frac{1}{n!}f^{(n)}(x_0) (x - x_0)^n + ...
+$$
+Through some algebra, if we set $f(x) = 0$ and solve for $x$ using the first-order approxmation, we get:
+$$ f(x) = 0 \approx f(x_0) + f'(x_0)(x - x_0) $$
+$$ f'(x_0)(x - x_0) \approx - f(x_0)$$
+$$ (x - x_0) \approx - \frac{f(x_0)}{f'(x_0)} $$
+$$ x \approx x_0 - \frac{f(x_0)}{f'(x_0)} $$
+We can replace the above function with the score, which is the first derivative of the log-likelihood:
+$f(x) = \bS(\bTheta) = \frac{\partial L(\bTheta)}{\partial \bTheta}$.
+And we can replace its derivative with the second derivative of the log-likelihood:
+$f'(x) = \frac{\partial \bS(\bTheta)}{\partial \bTheta} = \frac{\partial L^2(\bTheta)}{\partial^2 \bTheta} $.
+Furthermore, the $x_0$ in this equation becomes an arbitrary set of parameter values we are starting from, $\hat{\bTheta}^{(0)}$,
+while the $x$ represents our approximation of the MLE from that starting point, since $f(x) = 0$ and the MLE is what makes $\bS(\bTheta) = 0$.
+We can then use that resulting MLE, $\hat{\bTheta}^{(1)}$, as our starting point to again approximate where the MLE actually is, $\hat{\bTheta}^{(2)}$, repeating the process that can be generalized as:
+$$
+\hat{\bTheta}^{(k+1)} = 
+\hat{\bTheta}^{(k)} +
+(\frac{\partial L^2(\bTheta)}{\partial^2 \bTheta})
+\Bigr|_{\hat{\bTheta}^{(k)} })^{-1} 
+\frac{\partial L(\bTheta)}{\partial \bTheta}
+\Bigr|_{\hat{\bTheta}^{(k)} }
+$$
+We can rewrite this using the derivative functions of the likelihood we've already defined: the Score $\bS(\bTheta)$ and the Hessian $\bH(\bTheta)$:
+$$
+\hat{\bTheta}^{(k+1)} = 
+\hat{\bTheta}^{(k)} +
+\bH^{-1} (\hat{\bTheta}^{(k)})
+\bS(\hat{\bTheta}^{(k)})
+$$
+Connecting back to the earlier analogy, using the first and second derivatives of the likelihood landscape at the algorithm's current spot, it predicts where the landscape peak should be.
+This becomes the algorithm's MLE for its next iteration.
+However, once at this new estimate, if there is still curvature in the landscape, then we must not yet be at the true MLE of the observed.
+The algorithm iteratively does this, and in theory, after infinite iterations, the algorithm lands on the true MLE, where $\bS(\bTheta)^{(K)} = 0$ and therefore our iterative formula becomes:
+$$ \hat{\bTheta}^{(K+1)} = \hat{\bTheta}^{(K)}$$
+The algorithm has converged. Of course, in practice, we don't have time to do an infinite number of iterations, so we decide on some small distance between subsequent estimates for which we declare that the algorithm has converged.
+
+The following three quadratic methods discussed here differ in how they estimate the second derivative of the log-likelihood.
+
+
+
 
 \end{document}
