@@ -383,7 +383,7 @@ def _get_AI_matrix(P: np.ndarray, Vs_i: list[np.ndarray], y: np.ndarray) -> np.n
             if i > j:
                 continue # skips double computation
             # Equation 27.34 of textbook (second term, but halved)
-            AI_ij = y.T @ P @ Vs_i[i] @ P @ Vs_i[j] @ P @ y
+            AI_ij = 0.5 * y.T @ P @ Vs_i[i] @ P @ Vs_i[j] @ P @ y
             AI[i, j] = AI_ij 
             AI[j, i] = AI_ij # symmetric matrix
     return AI
@@ -471,7 +471,6 @@ def _run_REML_quad(y: np.ndarray, Vs_i: list[np.ndarray], X: np.ndarray = None, 
         elif method == 'NR':
             # Newton-Raphson method uses the observed Hessian
             H = -1 * (I_exp - 2*I_avg)
-            # changing 2 to 1 can lead to much faster convergence, but less stable, especially at high h2
 
         # computes offset for parameter estimates
         # Equation 27.32 of textbook
