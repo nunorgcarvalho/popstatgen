@@ -191,7 +191,7 @@ while the $x$ represents our approximation of the MLE from that starting point, 
 We can then use that resulting MLE, $\hat{\bTheta}^{(1)}$, as our starting point to again approximate where the MLE actually is, $\hat{\bTheta}^{(2)}$, repeating the process that can be generalized as:
 $$
 \hat{\bTheta}^{(k+1)} = 
-\hat{\bTheta}^{(k)} +
+\hat{\bTheta}^{(k)} -
 (\frac{\partial L^2(\bTheta)}{\partial^2 \bTheta})
 \Bigr|_{\hat{\bTheta}^{(k)} })^{-1} 
 \frac{\partial L(\bTheta)}{\partial \bTheta}
@@ -200,7 +200,7 @@ $$
 We can rewrite this using the derivative functions of the likelihood we've already defined: the Score $\bS(\bTheta)$ and the Hessian $\bH(\bTheta)$:
 $$
 \hat{\bTheta}^{(k+1)} = 
-\hat{\bTheta}^{(k)} +
+\hat{\bTheta}^{(k)} -
 \bH^{-1} (\hat{\bTheta}^{(k)})
 \bS(\hat{\bTheta}^{(k)})
 $$
@@ -211,9 +211,59 @@ The algorithm iteratively does this, and in theory, after infinite iterations, t
 $$ \hat{\bTheta}^{(K+1)} = \hat{\bTheta}^{(K)}$$
 The algorithm has converged. Of course, in practice, we don't have time to do an infinite number of iterations, so we decide on some small distance between subsequent estimates for which we declare that the algorithm has converged.
 
-The following three quadratic methods discussed here differ in how they estimate the second derivative of the log-likelihood.
+The following three quadratic methods discussed here differ in what they compute to use as the second derivative of the log-likelihood.
 
+\subsubsection{Newton-Raphson}
+The Newton-Raphson method uses the observed information matrix evaluated the current iteration's MLE as the second derivative of the log-likelihood.
+This is just the negative of the Hessian evaluated at the current MLE, so it looks identical to how we defined the iterative process earlier:
+$$
+\hat{\bTheta}^{(k+1)} = 
+\hat{\bTheta}^{(k)} -
+\bH^{-1} (\hat{\bTheta}^{(k)})
+\bS(\hat{\bTheta}^{(k)})
+$$
 
+\subsubsection{Fisher-Scoring}
+The Fisher-Scoring method uses the expected information matrix evaluated the current iteration's MLE as the second derivative of the log-likelihood.
+So, instead of the negative Hessian, it uses the Fisher information matrix.
+Noting the change in sign, the iterative formula looks like:
+\begin{align*}
+\hat{\bTheta}^{(k+1)} &= 
+\hat{\bTheta}^{(k)} +
+\mathcal{I}^{-1} (\hat{\bTheta}^{(k)})
+\bS(\hat{\bTheta}^{(k)}) \\
+&= 
+\hat{\bTheta}^{(k)} -
+\E[\bH^{-1} (\hat{\bTheta}^{(k)})]
+\bS(\hat{\bTheta}^{(k)})
+\end{align*}
+The Fisher-Scoring method offers some advantages compared to the Newton-Raphson method.
+First, it is often easier to compute the Fisher information matrix than the Hessian.
+The Hessian will usually be a function of both the unknown parameters we are trying to estimate (which are set to the current iteration's MLE when evaluating it) as well as unbiased estimates of said parameters that are computed directly from the observed data.
+Since these estimates from the data are unbiased, on expectation across different data samples (generated from the current MLE), those estimates will exactly equal their respective parameters.
+This often leads to terms cancelling out, simplifying the equation significantly.
+Second, the Fisher-Scoring method also appears to be better at converging correctly from different starting points compared to Newton-Raphson (according to Jenrich and Sampson 1986).
 
+\subsubsection{Average Information}
+
+The Average Information method uses the average of the expected and observed information matrices evaluated the current iteration's MLE as the second derivative of the log-likelihood. Defining this matrix as $\mathbf{AI}$, it is:
+$$
+\mathbf{AI}(\bTheta) = \frac{1}{2}
+(\mathcal{I}(\bTheta) - \bH(\bTheta))  
+$$
+Such that the iterative equation is:
+\begin{align*}
+\hat{\bTheta}^{(k+1)} &= 
+\hat{\bTheta}^{(k)} +
+\mathbf{AI}^{-1} (\hat{\bTheta}^{(k)})
+\bS(\hat{\bTheta}^{(k)}) \\
+&= 
+\hat{\bTheta}^{(k)} +
+(\frac{\mathcal{I}(\hat{\bTheta}^{(k)}) -
+\bH(\hat{\bTheta}^{(k)})}{2})^{-1}
+\bS(\hat{\bTheta}^{(k)})
+\end{align*}
+In some scenarios, taking the average of the expected and observed information matrices leads to terms cancelling out, resulting in a simpler matrix to calculate.
+So, using the Average Information method can be faster and converge better than the Newton-Raphson and Fisher-Scoring methods.
 
 \end{document}
