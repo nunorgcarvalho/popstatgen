@@ -265,7 +265,7 @@ def run_REML(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None],
         N_i = [Z.shape[1] for Z in Zs] # number of clusters in each random effect
         vars_i = _run_REML_EM(y, Vs_i, N_i, X, init, tol, max_iter, verbose)
     elif method in ['NR', 'FS', 'AI']:
-        vars_i = _run_REML_NRFS(y, Vs_i, X, init, method=method, tol=tol, max_iter=max_iter, verbose=verbose)
+        vars_i = _run_REML_quad(y, Vs_i, X, init, method=method, tol=tol, max_iter=max_iter, verbose=verbose)
     else:
         raise ValueError(f"Method '{method}' is not implemented. See documentation.")
 
@@ -432,11 +432,11 @@ def _run_REML_EM(y: np.ndarray, Vs_i: list[np.ndarray], N_i: list[int] = [None],
 
     return vars_i
 
-def _run_REML_NRFS(y: np.ndarray, Vs_i: list[np.ndarray], X: np.ndarray = None, init: list[float] = None,
+def _run_REML_quad(y: np.ndarray, Vs_i: list[np.ndarray], X: np.ndarray = None, init: list[float] = None,
                    method: str = 'FS', tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> np.ndarray:
             
     '''
-    Runs REML using the Newton-Raphson (NR) algorithm to estimate variance components. Also does the Fisher Scoring (FS) method, which is very similar. See `run_REML` for parameter descriptions. Returns variane components.
+    Runs REML using quadratic iterative methods to estimate variance components: Newton-Raphson, Fisher-Scoring, Average Information. See `run_REML` for parameter descriptions. Returns variane components.
     '''
     # Based on pg 794 of Bruce Walsh and Michael Lynch's "Genetics and Analysis of Quantitative Traits" (1998)
 
@@ -471,21 +471,7 @@ def _run_REML_NRFS(y: np.ndarray, Vs_i: list[np.ndarray], X: np.ndarray = None, 
         elif method == 'NR':
             # Newton-Raphson method uses the observed Hessian
             H = -1 * (I_exp - 2*I_avg)
-
-        # # Hessian Matrix (second derivative of the log-likelihood)
-        # H = _get_F_matrix(P, Vs_i)  # computes Fisher's Information Matrix (expected Hessian)
-        # # computes the second term of the Hessian matrix if NR method is used
-        # if method == 'NR':
-        #     for i in range(M):
-        #         for j in range(M):
-        #             if i > j:
-        #                 continue # skips double computation
-        #             # Equation 27.34 of textbook (second term)
-        #             H_ij_term2 = y.T @ P @ Vs_i[i] @ P @ Vs_i[j] @ P @ y
-        #             H[i, j] -= H_ij_term2 
-        #             H[j, i] -= H_ij_term2 # symmetric matrix
-        #     # negates Hessian for NR method
-        #     H = -1 * H
+            # changing 2 to 1 can lead to much faster convergence, but less stable, especially at high h2
 
         # computes offset for parameter estimates
         # Equation 27.32 of textbook
