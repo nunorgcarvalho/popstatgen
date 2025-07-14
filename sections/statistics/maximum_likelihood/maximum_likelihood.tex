@@ -272,4 +272,137 @@ Such that the iterative equation is:
 In some scenarios, taking the average of the expected and observed information matrices leads to terms cancelling out, resulting in a simpler matrix to calculate.
 So, using the Average Information method can be faster and converge better than the Newton-Raphson and Fisher-Scoring methods.
 
+\section{Variance component estimation through REML}
+Here, I'll define a common application of REML: estimating the variances of random effect components.
+For example, in statistical genetics, a phenotype can be modeled as a combination of fixed effects (such as covariate effects, like sex and age) and random effects, like an additive genetic component and shared environmental component.
+
+\subsection{Model definition}
+We define a mixed model for an outcome $\by$ composed of fixed effects and $M$ random effects as:
+$$ \by = \bX \bbeta + \sum_{i=1}^{M+1} \bZ_i \bu_i $$
+Where:
+\begin{itemize}
+    \item $\by$: phenotypes.
+    $N \times 1$ vector.
+    Centered so that $\E[\by]=0$.
+    \begin{itemize}
+        \item $N$: number of samples.
+    \end{itemize}
+    \item $\bX$: covariate design matrix.
+    $N \times C$ matrix.
+    \begin{itemize}
+        \item $C$: number of covariates.
+    \end{itemize}
+    \item $\bbeta$: covariate effects.
+    $C \times 1$ vector.
+    \item $M$: number of random effect components.
+    Does not include the random residual component.
+    Indexed by $i$.
+    \begin{itemize}
+        \item $i = M+1$ refers to the random residual component, often denoted by $\epsilon$
+    \end{itemize}
+    \item $\bZ_i$: incidence matrix for the $i \sps{th}$ random effect component.
+    $N \times N_i$ matrix.
+    Maps each individual to their respective cluster in the $i \sps{th}$ random effect component.
+    \begin{itemize}
+        \item $N_i$: number of clusters in $i \sps{th}$ random effect component.
+        \item $\bZ_{M+1} = \bI_{N}$
+    \end{itemize}
+    \item $\bu_i$: the $i \sps{th}$ set of random effects.
+    $N_i \times 1$ vector. Assumed to be drawn from a normal distribution:
+    $\bu_i \sim \N(0, \sigma^2_i \bA_i)$
+    \begin{itemize}
+        \item $\sigma^2_i$: variance of the $i \sps{th}$ random effect component.
+        This is what we are often interested in estimating.
+        \item $\bA_i$: relationship matrix for the $i \sps{th}$ random effect componnt.
+        $N_i \times N_i$ matrix.
+        This encodes the similarity between clusters for some component of interest.
+        \begin{itemize}
+            \item $\bA_{M+1} = \bI_N$
+        \end{itemize}
+    \end{itemize}
+\end{itemize}
+
+We can write $\by$ as a multivariate normal:
+$$ \by = \N(\bX \bbeta, \bV) $$
+where:
+$$ V = \sum_{i=1}^{M+1} \sigma^2_i \bZ_i \bA_i \bZ_i^{\T} $$
+
+\subsection{Solving ML equations through quadratic methods}
+The ML equations that need to be solved to obtain parameter estimates are not solvable through analytical methods.
+Instead, iterative methods should be utilized, such as the quadratic method, where we wrote earlier:
+$$
+\hat{\bTheta}^{(k+1)} = 
+\hat{\bTheta}^{(k)} -
+(\frac{\partial \LL^2(\bTheta)}{\partial^2 \bTheta})
+\Bigr|_{\hat{\bTheta}^{(k)} })^{-1} 
+\frac{\partial \LL(\bTheta)}{\partial \bTheta}
+\Bigr|_{\hat{\bTheta}^{(k)} }
+$$
+Here, $\bTheta$ denotes the variances of the random components, $\bTheta = [ \sigma^2_1, \sigma^2_2, ... , \sigma^2_K, \sigma^2_{\epsilon} ]^{\T}$.
+All we need is an equation for the first and second derivatives of the likelihood function.
+As the derivation is lengthy, I will simply write the equations that yield such derivatives.
+Refer to [Lynch \& Walsh, 1998, pg 784] for derivations.
+Note that these derivatives are evaluated at the current set of parameter estimates.
+In an iterative algorithm, it starts with a random (or user-specified) set of parameter estimates, and iteratively improves on them until the estimates change very little.
+We'll first define two sets of matrices that are used for both first and second derivatives.
+
+\subsubsection{Variance component matrices}
+The first is the derivative of the overall variance $\bV$ with respect to the variance of an individual component:
+\begin{align*}
+    \bV_i &= \frac{\partial \bV}{\partial \sigma^2_i} \\
+    &= \frac{\partial}{\partial \sigma^2_i}
+    \sum_{i=1}^{M+1} \sigma^2_i \bZ_i \bA_i \bZ_i^{\T} \\
+    &= \bZ_i \bA_i \bZ_i^{\T}
+\end{align*}
+This also applies for the random residual component, $\bV_{\epsilon} = \bI$.
+Note that this only needs to be computed once, prior to any iterations.
+However, the full variance matrix $\bV^{(k)}$ does need to be evaluated at every iteration, since it is a function of the current parameter estimates, $\bTheta^{(k)}$.
+
+\subsubsection{Projection matrix}
+The second matrix is crucial to REML:
+$$
+\bP = \bV^{-1} -
+\bV^{-1} \bX (\bX^{\T} \bV^{-1} \bX)^{-1} \bX^{\T} \bV^{-1}
+$$
+This projection matrix has the neat property that:
+$$ \bP \by = \bV^{-1} (\by - \bX \hat{\bbeta}) $$
+It projects the outcomes $\by$ onto a residual space that has subtracted out the fixed effects (it is orthogonal to $\bX$), while also accounting for the correlation of those residuals that is implied by $\bV$.
+By considering simpler scenarios, $\bP$ simplifies to perhaps more intuitive or familiar forms.
+For example, if there are fixed effects and the random components are independent from each other, e.g. $\by = \bX \bbeta + \bepsilon$, then $\bV^{-1} = \bI$, and so $\bP = \bI - \bX (\bX^{\T} \bX)^{-1} \bX^{\T}$.
+This is the residual maker matrix in ordinary least squares (OLS).
+Alternatively, if there are random components that are non-independent but no fixed effects, then $\bP = \bV^{-1}$.
+This is the form that would be used under ML implementation, as opposed to REML.
+
+Note that this matrix needs to be computed at every iteration of parameter estimation, since $\bP^{(k)}$ is a function of the current parameter estimates, $\bTheta^{(k)}$.
+
+\subsubsection{First derivative of the likelihood}
+With these two sets of matrices defined, we can now write the equation for the first derivative of the log-likelihood function with respect to a variance parameter, $\sigma^2_i$.
+$$
+\frac{\partial \LL}{\partial \sigma^2_i} =
+- \frac{1}{2} \mathrm{tr}[\bP \bV_i] +
+\frac{1}{2} \by^{\T} \bP \bV_i \bP \by
+$$
+Here, $\mathrm{tr}[\bA]$ denotes the \textbf{trace} of the matrix $\bA$, which is simply the sum of the diagonal elements of $\bA$.
+This also needs to be computed at every iteration.
+
+\subsubsection{Second derivative of the likelihood}
+As discussed above, different algorithms use different matrices as their second derivative of the log-likelihood differently.
+Using the notation from above:
+$$ \bH_{ij} =
+\frac{1}{2} \mathrm{tr}[\bP \bV_i \bP \bV_j] - 
+\by^{\T} \bP \bV_i \bP \bV_j \bP \by
+$$
+$$ \mathcal{I}_{ij} =
+\frac{1}{2} \mathrm{tr}[\bP \bV_i \bP \bV_j]
+$$
+$$ \mathbf{AI}_{ij} =
+\frac{1}{2}
+\by^{\T} \bP \bV_i \bP \bV_j \bP \by
+$$
+As you may have noticed, they are closely related to each other:
+$$
+\bH_{ij} = \mathcal{I}_{ij} - 2 \mathbf{AI}_{ij}
+$$
+This also needs to be computed at every iteration.
+
 \end{document}
