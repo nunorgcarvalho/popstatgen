@@ -152,11 +152,17 @@ $$
 This also applies when there are multiple parameters, such that the inverse of the Fisher information matrix evaluated at the MLE is the covariance matrix of the MLE.
 The i\sps{th} diagonal element is the variance of the MLE for the i\sps{th} parameter.
 The element (i,j) is the covariance of the MLE for the i\sps{th} and j\sps{th} parameters.
-%If our observed data produces a Hessian whose negative expected value matches the Fisher information matrix, then the negative inverse of the Hessian also works.
 
 \section{Restricted Maximum Likelihood (REML)}
-\% To do
-
+Maximum likelihood estimation is often applied in the context of a mixed model:
+$$
+\by = \bX \bbeta + \bu + \bepsilon
+$$
+where $\bX \bbeta$ encodes fixed effects on $\by$, while $\bu$ is a random effect drawn from a multivariate normal distribution, $\bu \sim MVN(0, \sigma_A^2 \bA)$. Furthermore, $\bepsilon$ can also be thought of as a random effect representing the random residual that is distributed from a single normal distribution, $\bepsilon \sim \N(0, \sigma_{\epsilon}^2 \bI)$. The problem with ML is that when estimating the parameter $\sigma_A^2$, it must assume that its estimate of the fixed effect is exactly correct, $\hat{\bbeta} = \bbeta$. This often leads to bias in the estimate of the other parameters (see [Lynch \& Walsh, 1998, pg 781] for an example). Restricted Maximum Likelihood (REML) resolves this by transforming the equation definining $y$ such that it does not depend on the fixed effects. The transformation can be thought of as multiplying both sides of the equation by a transformation matrix $\bK$ that when multiplied by $\bX$ equals $\textbf{1}$, $\bK \bX = \textbf{0}$:
+$$
+\bK \by = \bK \bu + \bK \bepsilon
+$$
+The way this changes downstream ML equations depends on the application. For the application of REML in variance component decomposition, as shown here, see the article on Heritability.
 \section{Methods of solving for the MLE}
 In practice, solving for the set of parameters that makes the score of the likelihood function equal to zero is very difficult.
 Instead, there are algorithms that start with a guess for the parameter estimates, and then iteratively move closer and closer to the parameter values that maximize the likelihood of the observed data.
