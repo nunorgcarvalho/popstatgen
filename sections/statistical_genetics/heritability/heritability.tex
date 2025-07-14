@@ -173,5 +173,15 @@ A_{jk} = \frac{1}{N}\sum_{i=1}^{M} A_{ijk} =
 \end{cases}
 $$
 
+\subsection{Estimating the genetic variance component through REML}
+Notice that earlier, we were able to define the phenotype $\by$ as a sum of random effects, treating $\bA$ as a good approxiation of $bG$:
+\begin{equation*}
+\by = \bg + \bepsilon
+\quad\mathrm{where}\quad
+\bg \sim \N(0, \bA \varg)
+\quad\mathrm{and}\quad
+\bepsilon \sim \N(0, \bI \vareps)
+\end{equation*}
+The unknown parameters here, $\varg$ and $\vareps$, can be estimated through REML (Restricted Maximum Likelihood; since this model doesn't include any fixed effects, simple Maximum Likelihood would also suffice). See the entry on "Maximum Likelihood" for a derivation of how variance component parameters are estimated through REML.
 
 \end{document}
