@@ -14,7 +14,7 @@
 
 \maketitle
 
-\section{SNP Heritability}
+\section{REML-based heritability estimation}
 These derivations are based on the Methods of [\href{https://www.nature.com/articles/ng.608}{Yang et al., 2010}]. 
 
 \subsection{Phenotype model}
@@ -61,27 +61,24 @@ Where:
     \end{itemize}
 \end{itemize}
 We assume $\bX_c$, $\bbeta$, and $\bepsilon$ are all independent from each other.
-We can define the genetic effects as a single term, $\bg = \bX_c \bbeta$, meaning that:
-\begin{equation*}
-\by = \bg + \bepsilon
-\quad\mathrm{where}\quad
-\bg \sim \N(0, I \varg)
-\quad\mathrm{where}\quad
-\varg = M_c \sigma_{\beta}^2
-\end{equation*}
-We interpret $\varg$ as variance of total additive genetic effects on the phenotype.
 
 \subsection{Variance of the phenotype}
 By making use of the independence between terms, we can define the variance-covariance matrix of $\by$ as:
 \begin{align*}
     \Var[\by] &= \Var[\bX_c \bbeta + \bepsilon] \\
+    &= \Var[\bX_c \bbeta] + \Var[\bepsilon] \\
     &= \Var[\bX_c] \Var[\bbeta] + \Var[\bepsilon] \\
-    &= (\bX_c \bX_c^{\T}) \varg + \bI \vareps \\
-    &= (\bX_c \bX_c^{\T}) \frac{\varg}{M_c} + \bI \vareps \\
+    &= (\bX_c \bX_c^{\T}) \sigma_{\beta}^2 + \bI \vareps \\
+    &= \frac{\bX_c \bX_c^{\T}}{M_c} M_c \sigma_{\beta}^2 + \bI \vareps \\
     &= \bG \varg + \bI \vareps \\
 \end{align*}
-Where we define $\bG = \frac{\bX_c \bX_c^{\T}}{M_c}$ as the $N \times N$ genetic relationship matrix (GRM) between individuals.
+where we define $\bG = \frac{\bX_c \bX_c^{\T}}{M_c}$ as the $N \times N$ genetic relationship matrix (GRM) between individuals.
 The $G_{ii}$ element is the variance of individual $i$'s normalized genotype vector, while the $G_{ij}$ element is the covariance of individuals $i$ and $j$'s normalized genotype vectors.
+
+We also define $\varg = M_c \sigma_{\beta}^2$ to be the variance of the total additive genetic effects on the phenotype. We can therefore think of individuals' phenotypes as being derived from the sum of a genetic random effect $\bg = \bX_c \bbeta$ and a residual random effect $\bepsilon$. From the general rule of multivariable statistics that $\Var[\bA \bv] = \bA \Var[\bv] \bA^{\T}$, we can write the genetic random effect as coming from a normal distribution:
+$$ \bg \sim \N(\E[\bX \bbeta], \Var[\bX \bbeta]) $$
+Because $\E[\bbeta] = 0$, then $\E[\bx \bbeta] = 0$. As for the variance, we can reuse the definitions from earlier, $\Var[\bX \bbeta] =  \bG \varg$. Therefore,
+$$ \bg \sim \N(0, \bG \varg) $$
 
 Narrow-sense heritability is defined as the proportion of phenotypic variance, $\sigma_P^2$, explained by additive genetic effects:
 $$ h^2 = \frac{\varg}{\sigma_P^2} = \frac{\varg}{\varg + \vareps} $$
@@ -175,8 +172,6 @@ A_{jk} = \frac{1}{N}\sum_{i=1}^{M} A_{ijk} =
 1 + \frac{1}{N}\sum_{i=1}^{M} \frac{{x'}_{ij}^2 - (1 + 2 p_i) x'_{ij} + 2 p_i^2}{2 p_i (1 - p_i)}, & j = k
 \end{cases}
 $$
-
-
 
 
 \end{document}
