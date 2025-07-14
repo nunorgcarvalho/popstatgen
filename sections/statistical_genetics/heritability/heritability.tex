@@ -97,7 +97,7 @@ Note that because we are also working with a sample, $X$ is normalized using sam
 
 $$ \bX_i = \frac{\bX'_i - 2 p_i}{\sqrt{2 p_i (1 - p_i)}} $$
 
-However, this equation for $A$ ignores the sampling error associated with each SNP.
+However, this equation for $\bA$ ignores the sampling error associated with each SNP.
 Let's consider the covariance computation between two individuals for SNP $i$, which is then summed across $M$ SNPs to get the value for $A_{jk}$.
 When $j \neq k$:
 \begin{align*}
@@ -106,7 +106,18 @@ When $j \neq k$:
     \frac{x'_{ik} - 2 p_i}{\sqrt{2 p_i (1 - p_i)}} \\
     &= \frac{(x'_{ij} - 2 p_i)(x'_{ik} - 2 p_i)}{2 p_i (1 - p_i)}
 \end{align*}
-Because $x'_{ij}$ and $x'_{ik}$ are independent from each other and $p_i$ is a constant:
+
+Because $x'_{ij}$ and $x'_{ik}$ are independent from each other, the expected value of this is:
+
+\begin{align*}
+    \E[A_{ijk}] &= \E[\frac{(x'_{ij} - 2 p_i)(x'_{ik} - 2 p_i)}{2 p_i (1 - p_i)}] \\
+    &= \frac{(\E[x'_{ij}] - 2 p_i)(\E[x'_{ik}] - 2 p_i)}{2 p_i (1 - p_i)} \\
+    &= \frac{(2 p_i - 2 p_i)(2 p_i - 2 p_i)}{2 p_i (1 - p_i)} \\
+    &= 0
+\end{align*}
+This makes sense if our sample is of unrelated individuals.
+If the raw genotypes of two individuals at a SNP are independent from each other, then the covariance of their adjusted genotypes should also be zero.
+Furthermore, the variance of $A_{ijk}$ is given by:
 \begin{align*}
     \Var[A_{ijk}] &= \Var[\frac{(x'_{ij} - 2 p_i)(x'_{ik} - 2 p_i)}{2 p_i (1 - p_i)}] \\
     &= \frac{\Var[(x'_{ij} - 2 p_i)]\Var[(x'_{ik} - 2 p_i)]}{(2 p_i (1 - p_i))^2} \\
@@ -114,23 +125,58 @@ Because $x'_{ij}$ and $x'_{ik}$ are independent from each other and $p_i$ is a c
     &= \frac{(2 p_i (2 - p_i))(2 p_i (2 - p_i))}{(2 p_i (1 - p_i))^2} \\
     &= 1
 \end{align*}
-So, the variance in $A_{jk}$ is independent of allele frequency. But this is not the case when $j = k$:
+So, the variance in $A_{jk}$ is independent of allele frequency, which is a desirable property.
+But do these properties hold up when $j = k$ (i.e. variance of an indvidual's genotype)?
 \begin{align*}
     A_{ijj} &= x_{ij}^2 \\
     &= (\frac{x'_{ij} - 2 p_i}{\sqrt{2 p_i (1 - p_i)}})^2 \\
     &= \frac{(x'_{ij} - 2 p_i)^2}{2 p_i (1 - p_i)}
 \end{align*}
-For simplicity, let's denote $Z = 2 p_i (1 - p_i)$ and make use of $\Var[Y] = \E[Y^2] - \E[Y]^2$:
+For deriving $\E[A_{ijj}]$, we make use of:
 \begin{align*}
-    \Var[A_{ijj}] &= \Var[\frac{(x'_{ij} - 2 p_i)^2}{Z}] \\
-    &= \frac{\Var[(x'_{ij} - 2 p_i)^2]}{(Z)^2} \\
-    &= \frac{\E[((x'_{ij} - 2 p_i)^2)^2] - \E[(x'_{ij} - 2 p_i)^2)]^2}{(Z)^2} \\
-    &= \frac{(Z) - (Z)^2}{(Z)^2} \\
-    &= \frac{(Z)(1  - Z)}{(Z)^2} \\
-    &= \frac{1  - Z}{Z} \\
-    &= \frac{1  - 2 p_i (1 - p_i)}{2 p_i (1 - p_i)} \\
+    E[{x'}_{ij}^2] &= \sum_{n=0}^{2} \E[{x'}_{ij}^2 | {x'}_{ij}=n] \Pr({x'}_{ij}=n) \\
+    &= (0)^2 (1-p_i)^2 + (1)^2 2 p_i (1-p_i) + (2)^2 (p_i)^2 \\
+    &= 2 p_i - 2 p_i^2 + 4 p_i^2 \\
+    &= 2 p_i^2 + 2 p_i
+\end{align*}
+Allowing us to calculate $\E[A_{ijj}]$:
+\begin{align*}
+    \E[A_{ijj}] &= \E[\frac{(x'_{ij} - 2 p_i)^2}{2 p_i (1 - p_i)}] \\
+    &= \frac{\E[{x'}_{ij}^2 - 4 p_i x'_{ij} + 4 p_i^2]}{2 p_i (1 - p_i)} \\
+    &= \frac{\E[{x'}_{ij}^2] - 4 p_i \E[x'_{ij}] + 4 p_i^2}{2 p_i (1 - p_i)} \\
+    &= \frac{2 p_i^2 + 2 p_i - 4 p_i (2 p_i) + 4 p_i^2}{2 p_i (1 - p_i)} \\
+    &= \frac{2 p_i - 2 p_i^2}{2 p_i (1 - p_i)} \\
+    &= \frac{2 p_i (1 - p_i)}{2 p_i (1 - p_i)} \\
+    &= 1
+\end{align*}
+So, the expected variance of an individual's normalized genotype is 1 and independent of the allele frequency, which is a desirable property.
+However, this frequency-independence does not hold for the variance.
+For simplicity, let's denote $P = 2 p_i (1 - p_i)$ and make use of $\Var[Y] = \E[Y^2] - \E[Y]^2$:
+\begin{align*}
+    \Var[A_{ijj}] &= \Var[\frac{(x'_{ij} - 2 p_i)^2}{P}] \\
+    &= \frac{\Var[(x'_{ij} - 2 p_i)^2]}{(P)^2} \\
+    &= \frac{\E[((x'_{ij} - 2 p_i)^2)^2] - \E[(x'_{ij} - 2 p_i)^2)]^2}{(P)^2} \\
+    &= \frac{(P) - (P)^2}{(P)^2} \\
+    &= \frac{(P)(1  - P)}{(P)^2} \\
+    &= \frac{1 - P}{P} \\
+    &= \frac{1 - 2 p_i (1 - p_i)}{2 p_i (1 - p_i)} \\
 \end{align*}
 The full derivation for why $\E[((x'_{ij} - 2 p_i)^2)^2] = \E[(x'_{ij} - 2 p_i)^2] = 2 p_i (1 - p_i)$ is very lengthy algebraically, but can be shortcutted by using the formula for the \href{https://en.wikipedia.org/wiki/Binomial_distribution#Higher_moments}{higher moments of a binomially distributed variable}, where $n=2$ and $p=p_i$.
 Importantly, the variance of $A_{jj}$ therefore depends on the allele frequencies of the SNPs, even after normalization.
+$\bA$ would be a better estimator of the GRM if for the same individual, its variance did not depend on the allele frequency, so we want to adjust $A_{ijj}$ so that $\E[A_{ijj}] = 1$ like before, but also that $\Var[A_{ijj}] = 1$ like for unrelated individuals.
+
+To be frank, I am not sure how the authors derived it, but this equation holds both properties:
+$$A_{ijj} = 1 + \frac{{x'}_{ij}^2 - (1 + 2 p_i) x_{ij} + 2 p_i^2}{2 p_i (1 - p_i)} $$
+We now explicitly define $\bA$ as follows:
+$$
+A_{jk} = \frac{1}{N}\sum_{i=1}^{M} A_{ijk} = 
+\begin{cases}
+\frac{1}{N}\sum_{i=1}^{M} \frac{(x'_{ij} - 2 p_i)(x'_{ik} - 2 p_i)}{ 2 p_i (1 - p_i)}, & j \neq k \\[10pt]
+1 + \frac{1}{N}\sum_{i=1}^{M} \frac{{x'}_{ij}^2 - (1 + 2 p_i) x'_{ij} + 2 p_i^2}{2 p_i (1 - p_i)}, & j = k
+\end{cases}
+$$
+
+
+
 
 \end{document}
