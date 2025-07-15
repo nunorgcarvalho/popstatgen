@@ -104,6 +104,12 @@ class Population:
         self._define_metric('p', pop.compute_freqs, shape = [self.M], # allele frequency
                             P = self.P)
         self._initialize_metrics(G = self.G)
+    
+    def make_sites_indep(self):
+        '''
+        Changes the recombination rates to make all sites independent.
+        '''
+        self.R = 0.5 * np.ones(self.M)
 
     ###################################
     #### Storing object attributes ####
@@ -149,17 +155,13 @@ class Population:
         Parameters:
             relations (dict): Dictionary of relationship matrices to update. Keys are relationship types (e.g. 'spouses', 'parents') and values are the corresponding matrices.
         '''
-        # spouses matrix
-        if 'spouses' in relations:
-            if self.keep_past_generations >= 1:
-                self.past[1].relations['spouses'] = relations['spouses'] # updates prior spouse matrix for past gen
-            self.relations['spouses'] = np.zeros((self.N, self.N), dtype=bool) # resets spouses relationship matrix for current gen
-        # parents matrix
-        if 'parents' in relations:
-            self.relations['parents'] = relations['parents'] # updates parent-child relationship matrix for current gen
-        # full siblings matrix
-        if 'full_sibs' in relations:
-            self.relations['full_sibs'] = relations['full_sibs'] # updates full siblings relationship matrix for current gen
+        for key in relations:
+            if key == 'spouses':
+                if self.keep_past_generations >= 1:
+                    self.past[1].relations['spouses'] = relations['spouses'] # updates prior spouse matrix for past gen
+                self.relations['spouses'] = np.zeros((self.N, self.N), dtype=bool) # resets spouses relationship matrix for current gen
+            else:
+                self.relations[key] = relations[key] # sets other relationship matrices for current generation
 
     def store_neighbor_matrix(self, LDwindow: float = None) -> sparse.coo_matrix:
         '''
@@ -181,7 +183,7 @@ class Population:
             LD_matrix (sparse 2D matrix (CSR)): M*M LD matrix (square of correlation) between pairs of variants in CSR format.
         '''
         if not hasattr(self, 'neighbor_matrix'):
-            raise Exception('Must have pre-computed neighbor_matrix. Use `Population.get_neighbor_matrix()`.')
+            raise Exception('Must have pre-computed neighbor_matrix. Use `Population.store_neighbor_matrix()`.')
         self.corr_matrix = pop.compute_corr_matrix(self.X, self.neighbor_matrix)
         self.LD_matrix = pop.compute_LD_matrix(self.corr_matrix)
 
@@ -516,7 +518,8 @@ class Population:
         # updates relationship matrix for parent-child relationships
         relations = {'spouses': rel_spouses,
                      'parents': rel_parents,
-                     'full_sibs': rel_fullsibs}
+                     'full_sibs': rel_fullsibs,
+                     'household': i_mate}
 
         return (H, relations)
 
