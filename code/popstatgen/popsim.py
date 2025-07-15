@@ -516,10 +516,10 @@ class Population:
         H = (H + mutations) % 2
 
         # updates relationship matrix for parent-child relationships
-        relations = {'spouses': rel_spouses,
-                     'parents': rel_parents,
-                     'full_sibs': rel_fullsibs,
-                     'household': i_mate}
+        relations = {'spouses': rel_spouses.astype(np.uint8), # occupies more space than a bool, but cleaner to see
+                     'parents': rel_parents.astype(np.uint8),
+                     'full_sibs': rel_fullsibs.astype(np.uint8),
+                     'household': M_mate.astype(np.uint8)}
 
         return (H, relations)
 
@@ -622,33 +622,37 @@ class Trait:
     '''
     Class for a trait belonging to a Population object.
     '''
-    def __init__(self, G: np.ndarray, M_causal: int = None,
-                 var_G: float = 1.0, var_Eps: float = 0.0, dist: str = 'normal'):
+    def __init__(self, G: np.ndarray, M_causal: int = None, dist: str = 'normal',
+                 var_G: float = 1.0, var_Eps: float = 0.0,
+                 random_effects: dict = None):
         '''
         Initializes and generates trait based on variance components.
         Parameters:
             G (2D array): N*M NON-standardized genotype matrix.
             M_causal (int): Number of causal variants (variants with non-zero effect sizes). Default is all variants.
-            var_G (float): Total expected variance contributed by per-standardized-allele genetic effects. Default is 1.0.
-            var_Eps (float): Total expected variance contributed by random noise.
             dist (str): Distribution to draw causal effects from. Options are:
             - 'normal': Normal distribution (default).
             - 'constant': All effect sizes are the same.
+            var_G (float): Total expected variance contributed by per-standardized-allele genetic effects. Default is 1.0.
+            var_Eps (float): Total expected variance contributed by random noise.
+            random_effects (dict): Dictionary of random effects to add to the trait. See `stat.get_random_effects()` for details. Default is None, meaning no random effects are added.
         '''
         # generates causal effects
         effects, _ = stat.generate_causal_effects(G.shape[1], M_causal, var_G, dist)
         self._initialize_effects(G, effects, var_Eps)
-        # computes trait 
-        self.generate_trait(G)
+        # computes trait
+        self.generate_trait(G, random_effects=random_effects)
 
     @classmethod
-    def from_effects(cls, G: np.ndarray, effects: np.ndarray, var_Eps: float = 0.0, per_allele: bool = False) -> 'Trait':
+    def from_effects(cls, G: np.ndarray, effects: np.ndarray, var_Eps: float = 0.0, per_allele: bool = False,
+                 random_effects: dict = None) -> 'Trait':
         '''
         Initializes a trait from a given genotype matrix and genetic effects array.
         Parameters:
             G (2D array): N*M NON-standardized genotype matrix.
             effects (1D array): M-length array of STANDARDIZED effects. Set non-causal effects to 0.
             per_allele (bool): Whether the effects are per-allele. Default is False.
+            random_effects (dict): Dictionary of random effects to add to the trait. See `stat.get_random_effects()` for details. Default is None, meaning no random effects are added.
         Returns:
             Trait: A new Trait object initialized with the given genotype matrix and effects.
         '''
@@ -661,7 +665,7 @@ class Trait:
             G_std = stat.get_G_std_for_effects(G)
             effects = stat.get_standardized_effects(effects, G_std, std2allelic=False)
         trait._initialize_effects(G, effects, var_Eps)
-        trait.generate_trait(G, fixed_h2=False)
+        trait.generate_trait(G, fixed_h2=False, random_effects=random_effects)
         return trait
     
     def _initialize_effects(self, G: np.ndarray, effects: np.ndarray, var_Eps: float = 0.0):
@@ -680,11 +684,12 @@ class Trait:
         self.var['G'] = self.effects.var() * G.shape[1]  # assumes independence!
         self.h2 = self.get_h2_var()
 
-    def generate_trait(self, G: np.ndarray, fixed_h2: bool = False):
+    def generate_trait(self, G: np.ndarray, random_effects: dict = None, fixed_h2: bool = False):
         '''
         Generates/updates trait using stored genetic effects and recomputing other components. Automatically updates object's attributes, instead of returning trait values.
         Parameters:
             G (2D array): N*M NON-standardized genotype matrix.
+            random_effects (dict): Dictionary of random effects to add to the trait. See `stat.get_random_effects()` for details. Default is None, meaning no random effects are added.
             fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Genetic component must be non-zero. Default is False.
         '''
         N = G.shape[0]
@@ -693,8 +698,15 @@ class Trait:
         # genetic component (using per-allele effects)
         self.y_['G'] = stat.compute_genetic_value(G, self.effects_per_allele)
 
+        # random effects components
+        if random_effects is not None:
+            for i in range(len(random_effects['Z'])):
+                Zu = random_effects['Z'][i] @ random_effects['u'][i]
+                self.y_[random_effects['name'][i]] = Zu
+
         var_Eps = self.var['Eps']
-        y_nonEps = self.y_['G']
+        # computes non-noise component of trait by adding up all 'y_' components except for 'Eps'
+        y_nonEps = np.sum([self.y_[key] for key in self.y_.keys() if key != 'Eps'], axis=0)
         # recomputes non-noise component to get needed var_Eps to maintain heritability
         if fixed_h2:
             var_Eps = (y_nonEps.var() / self.h2) - y_nonEps.var()
