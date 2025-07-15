@@ -97,6 +97,7 @@ class Population:
 
         # further attributes
         self._update_obj(H=H, update_past=False)
+        self.relations = {} # stores relations between individuals (e.g. parent-child, siblings, etc.)
 
         # defines metrics
         self.metric = {}
@@ -108,12 +109,14 @@ class Population:
     #### Storing object attributes ####
     ###################################
 
-    def _update_obj(self, H: np.ndarray = None, update_past: bool = True):
+    def _update_obj(self, H: np.ndarray = None, update_past: bool = True,
+                    relations: dict = None):
         '''
         Update the population object's attributes.
         Parameters:
             H (3D array): Haplotype array.
             update_past (bool): Whether to update the memory of past generations. Default is True.
+            relations (dict): Dictionary of relationship matrices to update. If None, does not update relationships. Default is None.
         '''
         if update_past:
             self._update_past()
@@ -122,7 +125,9 @@ class Population:
             self.G = pop.make_G(self.H)
             self.p = pop.compute_freqs(self.G, self.P)
             self.X = pop.standardize_G(self.G, self.p, self.P, impute=True, std_method='observed')
-        
+        if relations is not None:
+            self._update_relations(relations)
+
     def _update_past(self):
         '''
         Updates the past generations' objects, shifting them by one and adding the current object as the first element.
@@ -138,6 +143,24 @@ class Population:
             self.past[0] = self
         self.t += 1
     
+    def _update_relations(self, relations: dict):
+        '''
+        Updates the relationships in the population object.
+        Parameters:
+            relations (dict): Dictionary of relationship matrices to update. Keys are relationship types (e.g. 'spouses', 'parents') and values are the corresponding matrices.
+        '''
+        # spouses matrix
+        if 'spouses' in relations:
+            if self.keep_past_generations >= 1:
+                self.past[1].relations['spouses'] = relations['spouses'] # updates prior spouse matrix for past gen
+            self.relations['spouses'] = np.zeros((self.N, self.N), dtype=bool) # resets spouses relationship matrix for current gen
+        # parents matrix
+        if 'parents' in relations:
+            self.relations['parents'] = relations['parents'] # updates parent-child relationship matrix for current gen
+        # full siblings matrix
+        if 'full_sibs' in relations:
+            self.relations['full_sibs'] = relations['full_sibs'] # updates full siblings relationship matrix for current gen
+
     def store_neighbor_matrix(self, LDwindow: float = None) -> sparse.coo_matrix:
         '''
         Stores boolean sparse matrix of variants (`neighbor_matrix`) within the specified LD window distance (`LDwindow`) based on object's variant positions (currently only supports `BPs`). Calls `make_neighbor_matrix()` from `popgen_functions.py`.
@@ -215,9 +238,7 @@ class Population:
 
     #######################################
     #### Analysis of object attributes ####
-    #######################################
-    
-    
+    ####################################### 
     
     def _define_metric(self, metric_name: str, metric_func: callable, shape: list, **kwargs):
         '''
@@ -347,11 +368,12 @@ class Population:
         # loops through each generation
         for t in range(generations):
             if related_offspring:
-                H = self.generate_offspring(**kwargs)
+                (H, relations) = self.generate_offspring(**kwargs)
             else:
                 H = self.next_generation(**kwargs)
+                relations = None
             # updates objects and past
-            self._update_obj(H=H)
+            self._update_obj(H=H, update_past=True, relations=relations)
             # records metrics
             self._update_temp_metrics(t, G=self.G)
             if trait_updates:
@@ -365,22 +387,24 @@ class Population:
     def _pair_mates(self, AM_r: float = 0, AM_trait: Union[str, np.ndarray] = None,
                     AM_type: str = 'phenotypic') -> np.ndarray:
         '''
-        Pairs individuals up monogamously to mate and generate offspring. Population size must be multiple of 2. Allows for assortative mating (AM) if specified.
+        Pairs individuals up monogamously to mate and generate offspring. Population size must be multiple of 2. Allows for assortative mating (AM) if specified. Also updates the spouses relationship matrix.
         Parameters:
             AM_r (float): Desired correlation between AM trait values of spouses. Default is 0 (no assortative mating).
             AM_trait (str or 1D array): If a string, the name of the trait to use for assortative mating (as stored in the object). If an array, the trait values to use for assortative mating. If None, no assortative mating is performed. Default is None.
             AM_type (str): Type of assortative mating to perform. If 'phenotypic', uses the trait values directly. If 'genetic', uses the genetic values (only for object's stored traits). Default is 'phenotypic'.
 
         Returns:
-            tuple ((iM, iP)):
+            tuple ((iM, iP), rel_spouses):
             Where:
             - iMs (1D array): Array of length N/2 containing indices of the mothers.
             - iPs (1D array): Array of length N/2 containing indices of the fathers.
+            - rel_spouses (2D array): Relationship N*N matrix for spouses, where each element is True if the individuals are spouses and False otherwise.
         '''
         # checks for population size
         if self.N % 2 != 0:
             raise Exception('Population size must be multiple of 2.')
         N2 = self.N // 2
+        rel_spouses = np.zeros((self.N,self.N), dtype=bool) # relationship matrix for spouses
 
         # extracts assortative mating value:
         if AM_r != 0 and AM_trait is not None:
@@ -408,20 +432,24 @@ class Population:
         # sorts mothers and fathers by mate value
         iMs = iMs[np.argsort(AM_values[iMs])]
         iPs = iPs[np.argsort(mate_values[iPs])]    
+        # updates relationship matrix for spouses
+        rel_spouses[iMs, iPs] = 1
+        rel_spouses[iPs, iMs] = 1
 
-        return (iMs, iPs)
+        return ((iMs, iPs), rel_spouses)
 
     def generate_offspring(self, s: Union[float, np.ndarray] = 0,
                            mu: Union[float, np.ndarray] = 0,
                            **kwargs) -> np.ndarray:
         '''
-        Pairs up mates and generates offspring for parents' haplotypes. Only works for diploids. Each pair always has two offspring. Recombination rates are extracted from object attributes.
+        Pairs up mates and generates offspring for parents' haplotypes. Only works for diploids. Each pair always has two offspring. Recombination rates are extracted from object attributes. Also updates parent-child relationship matrix.
         Parameters:
             s (float or 1D array): Selection coefficient, such that an individual with the alternate allele has a (1+s) relative fitness compared to the reference allele. Occurs before mutation. If only a single value is provided, it is treated as the selection coefficient for all variants. Otherwise, must be an array of length M. Default is 0 (no selection).
             mu (float or 1D array): Mutation rate, such that the probability of any individual allele flipping to its alternate in the next generation is given by mu. Occurs after selection (i.e. mutation occurs in germline of current generation). Default is 0 (no mutations).
             **kwargs: All other arguments (related to assortative mating) are passed to the `_pair_mates` method. See that method for details.
         Returns:
             H (3D array): N*M*P array of offspring haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
+            relations (dict): Dictionary containing relationship matrices for the current generation, including 'spouses' and 'parents'.
         '''
         # checks ploidy
         if self.P != 2:
@@ -429,7 +457,7 @@ class Population:
 
         # Assortative Mating ####        
         # pairs up mates
-        iMs, iPs = self._pair_mates()
+        (iMs, iPs), rel_spouses = self._pair_mates()
 
         # Selection ####
         if isinstance(s, (float, int)):
@@ -445,7 +473,12 @@ class Population:
         # draws indices of parents for each offspring
         i_mate = np.random.choice(np.arange(len(iMs)), size=N_offspring, p=P_mate)
         parents = np.stack((iMs[i_mate], iPs[i_mate]), axis=1)
-        
+        # makes relationship matrix for full siblings
+        M_mate = np.zeros((N_offspring, len(iMs)), dtype=bool)
+        M_mate[np.arange(N_offspring), i_mate] = 1
+        rel_fullsibs = M_mate @ M_mate.T
+        np.fill_diagonal(rel_fullsibs, 0)
+
         # Drift + Recombination ####
         # generates variants for which a crossover event happens for each parent of each offspring
         crossover_events = np.random.binomial(n=1, p=self.R.reshape(1, self.M, 1),
@@ -457,6 +490,7 @@ class Population:
         # adds the starting shift and gets the modulo so that haplotype phase acts as an index
         haplo_ks = (haplo_k0[:, None, :] + haplo_phase) % 2
 
+        rel_parents = np.zeros((N_offspring, self.N), dtype=bool) # relationship matrix for parent-child relationships
         H = np.empty((N_offspring, self.M, self.P), dtype=int)
         for i in np.arange(N_offspring):
             iM = parents[i,0]
@@ -468,6 +502,9 @@ class Population:
             # shuffles haplotypes around
             haplos = haplos[:,np.random.choice(self.P, size=self.P, replace=False)]
             H[i,:,:] = haplos
+            # updates relationship matrix for parent-child relationships
+            rel_parents[i, iM] = 1
+            rel_parents[i, iP] = 1
 
         # Mutations ####
         if isinstance(mu, (float, int)):
@@ -476,7 +513,12 @@ class Population:
         # Apply mutations by flipping alleles (0 to 1 or 1 to 0) based on the mutation matrix
         H = (H + mutations) % 2
 
-        return H
+        # updates relationship matrix for parent-child relationships
+        relations = {'spouses': rel_spouses,
+                     'parents': rel_parents,
+                     'full_sibs': rel_fullsibs}
+
+        return (H, relations)
 
     #######################
     #### Visualization ####
