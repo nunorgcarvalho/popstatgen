@@ -235,3 +235,39 @@ def draw_p_init(M, method: str, params: list) -> np.ndarray:
     else:
         return np.full(M, np.nan)
 
+########################################
+#### Analysis of allele frequencies ####
+########################################
+
+def get_fixation_t(ps: np.ndarray = None) -> np.ndarray:
+    '''
+    For each variant, finds *first* generation (returned as an index) for which the allele frequency is 0 (loss) or 1 (fixation). A value of -1 means the variant never got fixed
+    Parameters:
+        ps (2D array): T*M matrix (where T is number of generations) containing allele frequencies over time.
+    Returns:
+        t_fix (1D array): Array of length M with the first generation (as an index) for which the respective allele was lost or fixed. If the allele was not fixed by the most recent simulation, a -1 is returned.
+    '''
+    # gets mask of whether frequency is 0 or 1
+    ps_mask = np.any((ps == 0, ps == 1), axis=0)
+    # finds first instance of True for each variant
+    t_fix = np.where(ps_mask.any(axis=0), ps_mask.argmax(axis=0), -1)        
+    return t_fix
+
+def summarize_ps(ps: np.ndarray = None, quantiles: tuple = (0.25, 0.5, 0.75)) -> tuple[np.ndarray, np.ndarray]:
+    '''
+    Returns the mean as well as the specified quantiles of variants across each generation.
+
+    Parameters:
+        ps (2D array): T*M matrix (where T is number of generations) containing allele frequencies over time.
+        quantiles (tuple): List of quantiles (e.g. 0.99) of allele frequencies across variants at each generation to plot. `summarize` must be set to True. Default is median, lower quartile, and upper quartile.
+    Returns:
+        tuple ((ps_mean, ps_quantile)):
+        Where:
+        - ps_mean (1D array): Array of length T (where T is the total number of generations) of mean allele frequency at each generation.
+        - ps_quantile (2D array): K*T matrix (where K is the number of quantiles specified) of allele frequency for each quantile at each generation.
+    '''
+    # computes mean allele frequency over time
+    ps_mean = ps.mean(axis=1)
+    # computes quantiles over time
+    ps_quantile = np.quantile(ps, quantiles, axis=1)
+    return (ps_mean, ps_quantile)

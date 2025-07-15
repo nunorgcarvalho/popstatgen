@@ -97,7 +97,6 @@ class Population:
 
         # further attributes
         self._update_obj(H=H, update_past=False)
-        self.ps = np.expand_dims(self.p, axis=0)
 
         # defines metrics
         self.metric = {}
@@ -217,48 +216,8 @@ class Population:
     #######################################
     #### Analysis of object attributes ####
     #######################################
-
-    def get_fixation_t(self, ps: np.ndarray = None) -> np.ndarray:
-        '''
-        For each variant, finds *first* generation (returned as an index) for which the allele frequency is 0 (loss) or 1 (fixation). A value of -1 means the variant never got fixed
-
-        Parameters:
-            ps (2D array): T*M matrix (where T is number of generations) containing allele frequencies over time. Defaults to object's allele frequency history.
-        
-        Returns:
-            t_fix (1D array): Array of length M with the first generation (as an index) for which the respective allele was lost or fixed. If the allele was not fixed by the most recent simulation, a -1 is returned.
-        '''
-        # uses population's allele frequency history if not specified
-        if ps is None:
-            ps = self.ps
-        # gets mask of whether frequency is 0 or 1
-        ps_mask = np.any((ps == 0, ps == 1), axis=0)
-        # finds first instance of True for each variant
-        t_fix = np.where(ps_mask.any(axis=0), ps_mask.argmax(axis=0), -1)        
-        return t_fix
     
-    def summarize_ps(self, ps: np.ndarray = None, quantiles: tuple = (0.25, 0.5, 0.75)) -> tuple[np.ndarray, np.ndarray]:
-        '''
-        Returns the mean as well as the specified quantiles of variants across each generation.
-
-        Parameters:
-            ps (2D array): T*M matrix (where T is number of generations) containing allele frequencies over time. Defaults to object's allele frequency history.
-            quantiles (tuple): List of quantiles (e.g. 0.99) of allele frequencies across variants at each generation to plot. `summarize` must be set to True. Default is median, lower quartile, and upper quartile.
-        
-        Returns:
-            tuple ((ps_mean, ps_quantile)):
-            Where:
-            - ps_mean (1D array): Array of length T (where T is the total number of generations) of mean allele frequency at each generation.
-            - ps_quantile (2D array): K*T matrix (where K is the number of quantiles specified) of allele frequency for each quantile at each generation.
-        '''
-        # uses population's allele frequency history if not specified
-        if ps is None:
-            ps = self.ps
-        # computes mean allele frequency over time
-        ps_mean = self.ps.mean(axis=1)
-        # computes quantiles over time
-        ps_quantile = np.quantile(self.ps, quantiles, axis=1)
-        return (ps_mean, ps_quantile)
+    
     
     def _define_metric(self, metric_name: str, metric_func: callable, shape: list, **kwargs):
         '''
@@ -383,10 +342,7 @@ class Population:
         '''
         # preps metrics for new generations
         self._prep_metrics(generations)
-        # keeps track of allele frequencies over generations if specified
-        previous_gens = self.ps.shape[0]
-        ps = np.full( (previous_gens + generations, self.M), np.nan)
-        ps[0:previous_gens,] = self.ps
+        previous_gens = self.metric['p']['values'].shape[0]
         
         # loops through each generation
         for t in range(generations):
@@ -397,7 +353,6 @@ class Population:
             # updates objects and past
             self._update_obj(H=H)
             # records metrics
-            ps[previous_gens + t,] = self.p
             self._update_temp_metrics(t, G=self.G)
             if trait_updates:
                 self.update_traits(fixed_h2=fixed_h2)
@@ -405,7 +360,6 @@ class Population:
         if not trait_updates:
             self.update_traits(fixed_h2=fixed_h2)
         # saves metrics to object
-        self.ps = ps
         self._update_metric_history()
 
     def _pair_mates(self, AM_r: float = 0, AM_trait: Union[str, np.ndarray] = None,
@@ -544,7 +498,7 @@ class Population:
         if j_keep is None:
             j_keep = tuple( range(self.M) )
         # uses population's allele frequency history
-        ps = self.ps
+        ps = self.metric['p']['values']
         # plots all generations if not specified
         if last_generations is None:
             t_start = 0
@@ -557,7 +511,7 @@ class Population:
         
         # if True, gets mean and quartiles for variants over time, which are plotted instead
         if summarize:
-            ps_mean, ps_quantile = self.summarize_ps(ps, quantiles)
+            ps_mean, ps_quantile = pop.summarize_ps(ps, quantiles)
             metrics = np.column_stack((ps_mean, ps_quantile.T))
             aes_line = {'color': ['deepskyblue'] + ['lightskyblue'] * len(quantiles),
                         'ls': ['--'] + [':'] * len(quantiles),
@@ -777,7 +731,6 @@ class Trait:
 
         return trait_new
         
-
 class SuperPopulation:
     '''
     Class for a superpopulation, which contains multiple populations. Allows for multiple populations to be simulated forward in time together.
