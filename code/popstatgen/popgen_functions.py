@@ -271,3 +271,24 @@ def summarize_ps(ps: np.ndarray = None, quantiles: tuple = (0.25, 0.5, 0.75)) ->
     # computes quantiles over time
     ps_quantile = np.quantile(ps, quantiles, axis=1)
     return (ps_mean, ps_quantile)
+
+###########################
+#### Handling families ####
+###########################
+
+def initialize_relations(N: int, N1: int = None):
+    '''
+    Initializes a dictionary of relations for a population of N individuals.
+    Parameters:
+        N (int): Number of individuals in the population.
+        N1 (int): Number of individuals in the parental generation. If not specified, defaults to N.
+    '''
+    if N1 is None:
+        N1 = N
+    relations = {
+        'parents': np.zeros((N, N1), dtype=np.uint8),
+        'full_sibs': np.zeros((N, N), dtype=np.uint8),
+        'spouses': np.zeros((N, N), dtype=np.uint8),
+        'household': np.zeros((N, N), dtype=np.uint8)
+    }
+    return relations

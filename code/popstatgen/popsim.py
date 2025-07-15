@@ -17,6 +17,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from typing import Tuple, Union
 from scipy import sparse
+from scipy.linalg import block_diag
 import copy
 import inspect
 
@@ -97,7 +98,7 @@ class Population:
 
         # further attributes
         self._update_obj(H=H, update_past=False)
-        self.relations = {} # stores relations between individuals (e.g. parent-child, siblings, etc.)
+        self.relations = pop.initialize_relations(self.N)
 
         # defines metrics
         self.metric = {}
@@ -159,7 +160,7 @@ class Population:
             if key == 'spouses':
                 if self.keep_past_generations >= 1:
                     self.past[1].relations['spouses'] = relations['spouses'] # updates prior spouse matrix for past gen
-                self.relations['spouses'] = np.zeros((self.N, self.N), dtype=bool) # resets spouses relationship matrix for current gen
+                self.relations['spouses'] = np.zeros((self.N, self.N), dtype=np.uint8) # resets spouses relationship matrix for current gen
             else:
                 self.relations[key] = relations[key] # sets other relationship matrices for current generation
 
@@ -523,6 +524,53 @@ class Population:
 
         return (H, relations)
 
+    def flatten_generations(self, generations: int = 1) -> 'Population':
+        '''
+        Combines the current generation with the specified number of past generations into a new single population object that is returned. Importantly, it updates the relationship matrices to reflect the relationships in the combined generations. Currently, only one past generation is supported.
+        Parameters:
+            generations (int): Number of past generations to include in the new population object. Default is 1, meaning only the current generation is included (only supported currently).
+        '''
+        # if generations !=1:
+        #     raise NotImplementedError("Only one past generation is supported.")
+        
+        # creates a SuperPopulation object with the current generation and the specified number of past generations
+        pops = []
+        Ns = []
+        for i in range(0, generations + 1):
+            pops.append(self.past[i]) # at i=0, references itself
+            Ns.append(self.past[i].N)
+        spop = SuperPopulation(pops)
+        # combines the two populations together inside the SuperPopulation object
+        pops_i = list(range(generations + 1))
+        spop.join_populations(pops_i)
+        new_pop = spop.pops[-1]  # the last population in the SuperPopulation is the combined one
+        new_pop.relations = pop.initialize_relations(new_pop.N)
+        del new_pop.relations['parents']
+
+        # updates relationship matrices in combined population
+        # full_sibs
+        full_sibs = block_diag(*[pop.relations['full_sibs'] for pop in pops])
+        # spouses
+        spouses = block_diag(*[pop.relations['spouses'] for pop in pops])
+        # parent-child
+        parent_child = np.zeros((new_pop.N, new_pop.N), dtype=np.uint8)
+        Ns_cumsum = np.cumsum([0] + Ns)
+        for gen in range(generations):
+            gen_parents = pops[gen].relations['parents']
+            i_start = Ns_cumsum[gen]
+            i_end = Ns_cumsum[gen + 1]
+            j_start = Ns_cumsum[gen + 1]
+            j_end = Ns_cumsum[gen + 2]
+            parent_child[i_start:i_end, j_start:j_end] = gen_parents
+            parent_child[j_start:j_end, i_start:i_end] = gen_parents.T
+
+        # actually sets relations
+        new_pop.relations['full_sibs'] = full_sibs
+        new_pop.relations['spouses'] = spouses
+        new_pop.relations['parent_child'] = parent_child
+
+        return new_pop
+
     #######################
     #### Visualization ####
     #######################
@@ -805,7 +853,7 @@ class SuperPopulation:
         if isinstance(pops, Population):
             # if only a single population is passed, convert it to a list
             pops = [pops]
-        self.pops = pops
+        self.pops = pops.copy()  # makes a copy of the list of populations
         # initializes basic attributes
         self.era = 0 # starts at 1
         # creates active vector
