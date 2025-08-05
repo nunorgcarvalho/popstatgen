@@ -188,6 +188,12 @@ class Population:
         self.corr_matrix = pop.compute_corr_matrix(self.X, self.neighbor_matrix)
         self.LD_matrix = pop.compute_LD_matrix(self.corr_matrix)
 
+    def store_GRM(self):
+        '''
+        Stores the genetic relationship matrix (GRM) in the `GRM` attribute using object's standardized genotype matrix. Calls `compute_GRM()` from `popgen_functions.py`.
+        '''
+        self.GRM = pop.compute_GRM(self.X)
+
     def add_trait(self, name: str, seed: int = None, **kwargs):
         '''
         Initializes and generates trait.
@@ -692,7 +698,7 @@ class Trait:
         self.generate_trait(G, random_effects=random_effects)
 
     @classmethod
-    def from_effects(cls, G: np.ndarray, effects: np.ndarray, var_Eps: float = 0.0, per_allele: bool = False,
+    def from_effects(cls, G: np.ndarray, effects: np.ndarray, per_allele: bool = False, var_Eps: float = 0.0,
                  random_effects: dict = None) -> 'Trait':
         '''
         Initializes a trait from a given genotype matrix and genetic effects array.
@@ -700,6 +706,7 @@ class Trait:
             G (2D array): N*M NON-standardized genotype matrix.
             effects (1D array): M-length array of STANDARDIZED effects. Set non-causal effects to 0.
             per_allele (bool): Whether the effects are per-allele. Default is False.
+            var_Eps (float): Total expected variance contributed by random noise. Default is 0.0.
             random_effects (dict): Dictionary of random effects to add to the trait. See `stat.get_random_effects()` for details. Default is None, meaning no random effects are added.
         Returns:
             Trait: A new Trait object initialized with the given genotype matrix and effects.
@@ -1008,7 +1015,6 @@ class SuperPopulation:
         for i in new_pops_i:
             # updates graph to reflect that the populations are now split
             self.graph[pop_i, i] = 1
-
 
     #######################
     #### Lineage Graph ####
