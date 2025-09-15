@@ -97,32 +97,86 @@ def get_standardized_effects(effects: np.ndarray, G_std: np.ndarray, std2allelic
             effects_output = effects * G_std # per-standardized-allele effects
         return effects_output
 
-def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: list[float], names: list[str] = None) -> dict:
+########################
+#### Random Effects ####
+########################
+
+def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: list[float],
+                       C: np.ndarray = None, names: list[str] = None) -> dict:
     '''
     Computes random effects of clusters for a mixed model.
     Parameters:
         Zs (list): List of design matrices for random effects. Each matrix should be N*N_i, where N is the number of individuals and N_i is the number of clusters for that random effect. If None, assumes identity matrix of size N*N (each individual is its own cluster).
-        As (list): List of covariance matrices for each random effect. Each matrix should be N_i*N_i. If None, assumes identity matrix (independent clusters).
+        As (list): List of correlation matrices for each random effect. Each matrix should be N_i*N_i.
         variances (list): List of variances for each random effect. For component i, random effects are drawn from a normal distribution with mean 0 and covariance given by variances[i] * As[i].
+        C (2D array): Correlation matrix between random effects. Should be M*M, where M is the number of random effects. Default is None, meaning random effects are independent. For random effects to be correlated, the design matrices Zs must be the same for all random effects.
         names (list): List of names for each random effect. Default is None, meaning names are not used (instead the index is used).
     Returns:
-        random_effects (dict): Dictionary of random effects, with names as keys and (Z, var) tuples as values.
+        random_effects (dict): Dictionary of relevant pieces of random effects, where each value in the dictionary is a list of the same length as the number of random effects.
     '''
+    # number of components
+    M = len(Zs)
     # names components if not given
     if names is None:
-        names = [f"RE_{i}" for i in range(len(Zs))]
-    # generates random effects for each cluster for each component
-    us = []
-    for i in range(len(As)):
+        names = [f"RE_{i}" for i in range(M)]
+    
+    # checks if A or Z matrices are None
+    for i in range(M):
+        if As[i] is None:
+            raise ValueError("As cannot contain None values. Each random effect must have a correlation matrix.")
         if Zs[i] is None:
             Zs[i] = np.identity(As[i].shape[0])
-        N_i = Zs[i].shape[1]
-        u = np.random.multivariate_normal(mean=np.zeros(N_i), cov=variances[i] * As[i])
-        us.append(u)
+        
+
+    # independent random effects
+    if C is None:
+        # generates random effects for each cluster for each component
+        us = []
+        for i in range(len(As)):
+            N_i = Zs[i].shape[1]
+            u = np.random.multivariate_normal(mean=np.zeros(N_i), cov=variances[i] * As[i])
+            us.append(u)
+    # correlated random effects
+    else:
+        # checks if C is valid
+        if C.shape[0] != M or C.shape[1] != M:
+            raise ValueError("Correlation matrix must be of shape M*M, where M is the number of random effects.")
+        # checks that all design matrices are the same
+        for i in range(1, M):
+            if not np.array_equal(Zs[i], Zs[0]):
+                raise ValueError("For correlated random effects, all design matrices Zs must be the same.")
+        # computes covariance matrix between random effects
+        N_i = Zs[0].shape[1]
+        D = np.diag(np.sqrt(variances)) # diagonal matrix of standard deviations
+        cov_matrix = D @ C @ D  # covariance matrix between random effects
+        
+        # makes nested list that is M*M from which block matrix will be made
+        outer_block = []
+        for i in range(M):
+            row_array = []
+            for j in range(M):
+                if i == j:
+                    # within-effect covariance matrix
+                    inner_mat = cov_matrix[i, i] * As[i]
+                else:
+                    # cross-effect covariance matrix
+                    inner_mat = cov_matrix[i, j] * np.multiply(As[i], As[j]) # element-wise multiplication
+                row_array.append(inner_mat)
+            outer_block.append(row_array)
+
+        # draws all random effects from single multivariate normal
+        Sigma = np.block(outer_block)  # full covariance matrix
+        # adds small jitter
+        #Sigma += np.eye(M * N_i) * 1e-6
+        us_flat = np.random.multivariate_normal(mean=np.zeros(M * N_i), cov=Sigma)
+        us = [us_flat[i * N_i:(i + 1) * N_i] for i in range(M)]
+
     # creates a dictionary of random effects
     random_effects = {
         'name': names,
         'var': variances,
+        'corr': C,
+        'Sigma': Sigma if C is not None else None,
         'Z': Zs,
         'A': As,
         'u': us
