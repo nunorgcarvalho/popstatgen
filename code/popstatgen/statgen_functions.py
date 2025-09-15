@@ -240,7 +240,8 @@ def plot_HE_regression(A: np.ndarray, y: np.ndarray, bins: int = 5) -> None:
 #### REstricted Maximum Likelihood (REML) Methods ####
 
 def run_REML(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None], X: np.ndarray = None, init: list[float] = None,
-             method: str = 'EM', tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> Tuple[np.ndarray, np.ndarray, float]:
+             method: str = 'EM', tol: float = 1e-5, max_iter: int = 1000,
+             force_non_neg: bool = False, verbose: int = 2) -> Tuple[np.ndarray, np.ndarray, float]:
     '''
     Runs REML for estimating variance components while accounting for fixed effects. Different algorithms are available.
     Parameters:
@@ -256,7 +257,8 @@ def run_REML(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None],
             - 'AI': Average Information algorithm (similar to NR). Even faster than FS and more stable. Used by GCTA.
         tol (float): Tolerance for convergence. Default is 1e-5.
         max_iter (int): Maximum number of iterations. Default is 1000.
-        verbose (bool): If True, prints convergence information per iteration. Default is True.
+        force_non_neg (bool): If True, forces variance components to be non-negative. Default is False.
+        verbose (int): Level of verbosity. 0 = silent, 1 = variance components per iteration (excluding residual), 2 = all variance components and offsets per iteration. 3 = same as level 2 but one component per line. Default is 2.
     Returns:
         output (dict): Dictionary containing the following keys:
             - 'var_components': Estimated variance components for each random effect, including residual.
@@ -295,9 +297,11 @@ def run_REML(y: np.ndarray, Bs: list[np.ndarray], Zs: list[np.ndarray] = [None],
 
     if method == 'EM':
         N_i = [Z.shape[1] for Z in Zs] # number of clusters in each random effect
-        vars_i = _run_REML_EM(y, Vs_i, N_i, X, init, tol, max_iter, verbose)
+        vars_i = _run_REML_EM(y, Vs_i, N_i, X, init, tol, max_iter, force_non_neg=force_non_neg,
+                              verbose=verbose)
     elif method in ['NR', 'FS', 'AI']:
-        vars_i = _run_REML_quad(y, Vs_i, X, init, method=method, tol=tol, max_iter=max_iter, verbose=verbose)
+        vars_i = _run_REML_quad(y, Vs_i, X, init, method=method, tol=tol, max_iter=max_iter,
+                                force_non_neg=force_non_neg, verbose=verbose)
     else:
         raise ValueError(f"Method '{method}' is not implemented. See documentation.")
 
@@ -420,8 +424,24 @@ def _get_AI_matrix(P: np.ndarray, Vs_i: list[np.ndarray], y: np.ndarray) -> np.n
             AI[j, i] = AI_ij # symmetric matrix
     return AI
 
-def _run_REML_EM(y: np.ndarray, Vs_i: list[np.ndarray], N_i: list[int] = [None], X: np.ndarray = None, init: list[float] = None,
-                 tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> np.ndarray:
+def _REML_output_msg(vars_i: np.ndarray, offsets: np.ndarray, iter: int, verbose: int) -> None:
+    M = len(vars_i)
+    if verbose == 1:
+        output = f'#{iter+1}: ' + ', '.join([f'Comp {i+1} = {vars_i[i]:.6f}' for i in range(M-1)])
+        print(output)
+    if verbose == 2:
+        output = f'#{iter+1}: ' + ', '.join([
+        f'Comp {i+1} = {vars_i[i]:.6f} ({"+" if offsets[i] > 0 else ""}{offsets[i]:.6f})'
+        for i in range(M)
+        ])
+        print(output)
+    if verbose == 3:
+        for i in range(M):
+            print(f"Iteration {iter+1}, Random Effect Component {i+1}: Updated variance = {vars_i[i]:.6f}, Offset = {offsets[i]:.6f}")
+
+def _run_REML_EM(y: np.ndarray, Vs_i: list[np.ndarray], N_i: list[int] = [None], X: np.ndarray = None,
+                 init: list[float] = None, tol: float = 1e-5, max_iter: int = 1000,
+                 force_non_neg: bool = False, verbose: int = 2) -> np.ndarray:
     '''
     Runs REML using the Expectation-Maximization (EM) algorithm to estimate variance components. See `run_REML` for parameter descriptions. Returns variane components.
     '''
@@ -449,13 +469,18 @@ def _run_REML_EM(y: np.ndarray, Vs_i: list[np.ndarray], N_i: list[int] = [None],
             # M-step: update variance components
             # Equation 27.36a of textbook (modified)
             vars_i[i] = var_i + offset
-            vars_i = np.maximum(vars_i, 1e-6) # ensures variance components are positive
+            
+            # ensures variance components are positive
+            vars_i_neg = np.zeros(M, dtype=bool)
+            if force_non_neg:
+                vars_i_neg = vars_i < 0
+                vars_i = np.maximum(vars_i, tol / 10)
 
-            if verbose and i < M - 1:  # don't print for residual variance component
-                print(f"Iteration {iter+1}, Random Effect {i+1}: Updated variance component = {vars_i[i]:.6f}, Offset = {offset:.6f}")
-        
+        # prints output message
+        _REML_output_msg(vars_i, offsets, iter, verbose)
+
         # check convergence
-        if np.max(np.abs(offsets)) < tol:
+        if np.max(np.abs(offsets[~vars_i_neg])) < tol:
             print(f"Converged after {iter+1} iterations.")
             break
         if iter == max_iter - 1:
@@ -465,8 +490,9 @@ def _run_REML_EM(y: np.ndarray, Vs_i: list[np.ndarray], N_i: list[int] = [None],
     return vars_i
 
 def _run_REML_quad(y: np.ndarray, Vs_i: list[np.ndarray], X: np.ndarray = None, init: list[float] = None,
-                   method: str = 'FS', tol: float = 1e-5, max_iter: int = 1000, verbose: bool = True) -> np.ndarray:
-            
+                   method: str = 'FS', tol: float = 1e-5, max_iter: int = 1000, 
+                   force_non_neg: bool = False, verbose: int = 1) -> np.ndarray:
+
     '''
     Runs REML using quadratic iterative methods to estimate variance components: Newton-Raphson, Fisher-Scoring, Average Information. See `run_REML` for parameter descriptions. Returns variane components.
     '''
@@ -509,14 +535,18 @@ def _run_REML_quad(y: np.ndarray, Vs_i: list[np.ndarray], X: np.ndarray = None, 
         offsets = np.linalg.pinv(H) @ dLs # pinv for numerical stability
         # updates parameter estimates
         vars_i += offsets
-        vars_i = np.maximum(vars_i, 1e-6) # ensures variance components are positive
 
-        for i in range(M):
-            if verbose and i < M - 1:  # don't print for residual variance component
-                print(f"Iteration {iter+1}, Random Effect {i+1}: Updated variance component = {vars_i[i]:.6f}, Offset = {offsets[i]:.6f}")
+        # ensures variance components are positive
+        vars_i_neg = np.zeros(M, dtype=bool)
+        if force_non_neg:
+            vars_i_neg = vars_i < 0
+            vars_i = np.maximum(vars_i, tol / 10) 
+
+        # prints output message
+        _REML_output_msg(vars_i, offsets, iter, verbose)
 
         # check convergence
-        if np.max(np.abs(offsets)) < tol:
+        if np.max(np.abs(offsets[~vars_i_neg])) < tol:
             print(f"Converged after {iter+1} iterations.")
             break
         if iter == max_iter - 1:
