@@ -97,12 +97,13 @@ def get_standardized_effects(effects: np.ndarray, G_std: np.ndarray, std2allelic
             effects_output = effects * G_std # per-standardized-allele effects
         return effects_output
 
-def get_random_effects(Zs: list[np.ndarray], variances: list[float], names: list[str] = None) -> dict:
+def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: list[float], names: list[str] = None) -> dict:
     '''
     Computes random effects of clusters for a mixed model.
     Parameters:
-        Zs (list): List of design matrices for random effects. Each matrix should be N*N_i, where N is the number of individuals and N_i is the number of clusters for that random effect.
-        variances (list): List of variances for each random effect. Random effects are drawn from a normal distribution with mean 0 and variance given by the corresponding element in this list.
+        Zs (list): List of design matrices for random effects. Each matrix should be N*N_i, where N is the number of individuals and N_i is the number of clusters for that random effect. If None, assumes identity matrix of size N*N (each individual is its own cluster).
+        As (list): List of covariance matrices for each random effect. Each matrix should be N_i*N_i. If None, assumes identity matrix (independent clusters).
+        variances (list): List of variances for each random effect. For component i, random effects are drawn from a normal distribution with mean 0 and covariance given by variances[i] * As[i].
         names (list): List of names for each random effect. Default is None, meaning names are not used (instead the index is used).
     Returns:
         random_effects (dict): Dictionary of random effects, with names as keys and (Z, var) tuples as values.
@@ -112,14 +113,18 @@ def get_random_effects(Zs: list[np.ndarray], variances: list[float], names: list
         names = [f"RE_{i}" for i in range(len(Zs))]
     # generates random effects for each cluster for each component
     us = []
-    for i in range(len(Zs)):
-        u = np.random.normal(loc=0, scale=np.sqrt(variances[i]), size=Zs[i].shape[1])
+    for i in range(len(As)):
+        if Zs[i] is None:
+            Zs[i] = np.identity(As[i].shape[0])
+        N_i = Zs[i].shape[1]
+        u = np.random.multivariate_normal(mean=np.zeros(N_i), cov=variances[i] * As[i])
         us.append(u)
     # creates a dictionary of random effects
     random_effects = {
         'name': names,
         'var': variances,
         'Z': Zs,
+        'A': As,
         'u': us
     }
     return random_effects

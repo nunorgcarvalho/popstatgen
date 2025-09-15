@@ -789,6 +789,27 @@ class Trait:
         '''
         h2 = self.var['G'] / np.sum(list(self.var.values()))
         return h2
+    
+    def get_components_matrix(self, exclude = None, include_y = True) -> np.ndarray:
+        '''
+        Returns a matrix of the trait components, where each column is a component and each row is an individual. Can exclude certain components if desired.
+        Parameters:
+            exclude (list): List of component names to exclude from the matrix. Default is None, meaning no components are excluded.
+            include_y (bool): Whether to include the overall trait values as the last column in the matrix. Default is True.
+        Returns:
+            component_matrix (2D array): N*C matrix of trait components, where N is the number of individuals and C is the number of components (including overall trait if `include_y` is True).
+        '''
+        components = []
+        for key in self.y_.keys():
+            if exclude is not None and key in exclude:
+                continue
+            components.append(self.y_[key])
+            
+        if include_y:
+            components.append(self.y)
+
+        component_matrix = np.column_stack(components)
+        return component_matrix
 
     @classmethod
     def concatenate_traits(cls, traits: list, G: np.ndarray) -> 'Trait':
