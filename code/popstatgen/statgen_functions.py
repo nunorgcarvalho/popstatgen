@@ -101,8 +101,42 @@ def get_standardized_effects(effects: np.ndarray, G_std: np.ndarray, std2allelic
 #### Random Effects ####
 ########################
 
+# The following function was written (almost) entirely by ChatGPT 5
+def psd_sqrt(M, clip=0.0):
+    """
+    Symmetric PSD square root via eigendecomposition.
+    Returns S such that S @ S.T ≈ M (up to numerical error).
+    'clip' floors eigenvalues (e.g., tiny negatives due to roundoff) to this value.
+    """
+    M = 0.5 * (M + M.T)  # symmetrize, just in case
+    w, U = np.linalg.eigh(M)
+    w = np.clip(w, clip, None)    # floor small/negative eigenvalues
+    S = (U * np.sqrt(w)) @ U.T
+    # small symmetrization
+    return 0.5 * (S + S.T)
+
+# The following function was written (almost) entirely by ChatGPT 5
+def nearest_correlation_matrix(X, eps_eig=1e-12):
+    """
+    One-shot Higham-style projection to the nearest correlation-like matrix:
+      1) symmetrize
+      2) project to PSD by clipping eigenvalues
+      3) renormalize to unit diagonal (convert covariance -> correlation)
+    Ensures symmetric, PSD, and ones on diagonal.
+    """
+    X = 0.5 * (X + X.T)
+    w, V = np.linalg.eigh(X)
+    w = np.clip(w, eps_eig, None)  # make PD for a clean Cholesky downstream
+    Y = (V * w) @ V.T
+    d = np.sqrt(np.diag(Y))
+    Dinv = np.diag(1.0 / d)
+    Ccorr = Dinv @ Y @ Dinv
+    Ccorr = 0.5 * (Ccorr + Ccorr.T)
+    np.fill_diagonal(Ccorr, 1.0)
+    return Ccorr
+
 def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: list[float],
-                       C: np.ndarray = None, names: list[str] = None) -> dict:
+                       C: np.ndarray = None, names: list[str] = None, debug: bool = False) -> dict:
     '''
     Computes random effects of clusters for a mixed model.
     Parameters:
@@ -111,6 +145,7 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         variances (list): List of variances for each random effect. For component i, random effects are drawn from a normal distribution with mean 0 and covariance given by variances[i] * As[i].
         C (2D array): Correlation matrix between random effects. Should be M*M, where M is the number of random effects. Default is None, meaning random effects are independent. For random effects to be correlated, the design matrices Zs must be the same for all random effects.
         names (list): List of names for each random effect. Default is None, meaning names are not used (instead the index is used).
+        debug (bool): If True, output contains another dictionary inside it with information relevant for correlated random effects. Default is False.
     Returns:
         random_effects (dict): Dictionary of relevant pieces of random effects, where each value in the dictionary is a list of the same length as the number of random effects.
     '''
@@ -127,60 +162,138 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         if Zs[i] is None:
             Zs[i] = np.identity(As[i].shape[0])
         
-
+    rng = np.random.default_rng()
     # independent random effects
     if C is None:
-        # generates random effects for each cluster for each component
         us = []
-        for i in range(len(As)):
-            N_i = Zs[i].shape[1]
-            u = np.random.multivariate_normal(mean=np.zeros(N_i), cov=variances[i] * As[i])
-            us.append(u)
+        # generates random effects for each cluster for each component
+        for i in range(M):
+            N_i = As[i].shape[0]
+            #u_i = rng.multivariate_normal(mean=np.zeros(N_i), cov=variances[i] * As[i])
+            eps = rng.standard_normal(N_i) # ~ N(0, I_{N_i})
+            L = np.linalg.cholesky(0.5*(As[i]+As[i].T) + 1e-12*np.eye(N_i)) # As[i] = L L^T
+            g = L @ eps # cluster effects ~ N(0, A_i)
+            u_i = np.sqrt(variances[i]) * (Zs[i] @ g)
+            us.append(u_i)
+
     # correlated random effects
     else:
         # checks if C is valid
         if C.shape[0] != M or C.shape[1] != M:
             raise ValueError("Correlation matrix must be of shape M*M, where M is the number of random effects.")
-        # checks that all design matrices are the same
-        for i in range(1, M):
-            if not np.array_equal(Zs[i], Zs[0]):
-                raise ValueError("For correlated random effects, all design matrices Zs must be the same.")
-        # computes covariance matrix between random effects
-        N_i = Zs[0].shape[1]
-        D = np.diag(np.sqrt(variances)) # diagonal matrix of standard deviations
-        cov_matrix = D @ C @ D  # covariance matrix between random effects
         
-        # makes nested list that is M*M from which block matrix will be made
-        outer_block = []
+        # the following blocks of code were written (almost) entirely by ChatGPT 5
+
+        ## step 1: build individual-level kernels & their square roots ##
+        N = Zs[0].shape[0]
+        vars = np.asarray(variances, dtype=float)
+
+        # Individual-level covariance *kernels* (correlations if As are correlations and Z is 0/1)
+        #   K_i = Z_i A_i Z_i^T  (shape N x N)
+        Ks = [Zs[i] @ As[i] @ Zs[i].T for i in range(M)]
+
+        # Square roots S_i = K_i^{1/2}  (shape N x N)
+        # These are the "feature maps" that carry the within-effect structure for effect i.
+        Ss = [psd_sqrt(Ks[i], clip=0.0) for i in range(M)]
+
+        ## step 2: compute kappa shrinkage factors ##
+
+        # We want the *observed* across-individual Pearson correlation between u_i and u_j
+        # to match the input C[i,j]. Under the LMC construction (below), its expectation is
+        #   E[corr(u_i, u_j)] ≈ C_input[i,j] * kappa[i,j]
+        # where
+        #   kappa[i,j] = tr(S_i S_j) / sqrt(tr(S_i S_i) tr(S_j S_j))
+        # and tr(S_i S_i) = tr(K_i) because S_i S_i^T = K_i.
+        trKi = np.array([np.trace(Ks[i]) for i in range(M)], dtype=float)
+
+        kappa = np.eye(M, dtype=float)
         for i in range(M):
-            row_array = []
+            for j in range(i+1, M):
+                num = np.trace(Ss[i] @ Ss[j])  # tr(S_i S_j)
+                den = np.sqrt(trKi[i] * trKi[j])
+                kij = float(num / den)
+                # numerical guard into [0,1]
+                kij = min(max(kij, 0.0), 1.0)
+                kappa[i, j] = kappa[j, i] = kij
+        # check if any requested correlations are too high with LMC
+        too_high = np.abs(C) > (kappa + 1e-12)
+        if np.any(too_high):
+            pairs = np.argwhere(too_high)
+            for i, j in pairs:
+                if i < j:
+                    print(f"Requested |C[{i},{j}]|={abs(C[i,j]):.3f} exceeds "
+                        f"max achievable kappa[{i},{j}]={kappa[i,j]:.3f}. "
+                        f"Observed corr will cap at ~{np.sign(C[i,j])*kappa[i,j]:.3f}.")
+
+        ## step 3: calibrate effect-correlation to hit observed C ##
+
+        # Target observed correlation is C; we need to "pre-whiten" it by kappa so that
+        #   observed ≈ C_calibrated ∘ kappa  (∘ = Hadamard on the *M x M* effect space),
+        # i.e., C_calibrated[i,j] = C[i,j] / kappa[i,j] for i != j.
+        C = np.asarray(C, dtype=float)
+        C_cal = C.copy()
+        for i in range(M):
             for j in range(M):
                 if i == j:
-                    # within-effect covariance matrix
-                    inner_mat = cov_matrix[i, i] * As[i]
+                    C_cal[i, j] = 1.0
                 else:
-                    # cross-effect covariance matrix
-                    inner_mat = cov_matrix[i, j] * np.multiply(As[i], As[j]) # element-wise multiplication
-                row_array.append(inner_mat)
-            outer_block.append(row_array)
+                    if kappa[i, j] > 0:
+                        C_cal[i, j] = np.clip(C[i, j] / kappa[i, j], -1.0, 1.0)
+                    else:
+                        # If kappa=0, the two effects share no common modes; the observed corr must be ~0.
+                        C_cal[i, j] = 0.0
 
-        # draws all random effects from single multivariate normal
-        Sigma = np.block(outer_block)  # full covariance matrix
-        # adds small jitter
-        #Sigma += np.eye(M * N_i) * 1e-6
-        us_flat = np.random.multivariate_normal(mean=np.zeros(M * N_i), cov=Sigma)
-        us = [us_flat[i * N_i:(i + 1) * N_i] for i in range(M)]
+        # Project to the nearest valid correlation matrix (symmetric, PSD, diag=1)
+        C_cal = nearest_correlation_matrix(C_cal, eps_eig=1e-12)
+
+        ## step 4: sample via LMC with the calibrated effect correlation ##
+
+        # Factor C_cal = L L^T. Use Cholesky with tiny jitter for stability.
+        try:
+            L = np.linalg.cholesky(C_cal)
+        except np.linalg.LinAlgError:
+            L = np.linalg.cholesky(C_cal + 1e-12 * np.eye(M))
+
+        # Draw M latent standard normal fields over individuals (each is length-N)
+        Z_latent = rng.standard_normal(size=(N, M))  # columns z_q
+
+        # Mix them across effects: Y = Z_latent @ L.T, so column i is y_i = sum_q L[i,q] z_q
+        Y = Z_latent @ L.T  # shape (N, M)
+
+        # Build the M random effects:
+        #   u_i = sqrt(var_i) * S_i @ y_i
+        us = []
+        for i in range(M):
+            u_i = np.sqrt(vars[i]) * (Ss[i] @ Y[:, i])
+            us.append(u_i)
+
+        # After this:
+        #   - us is a list of length M; each us[i] is a length-N vector (the random effect for effect i)
+        #   - Var(us[i]) ≈ vars[i] * (Z_i A_i Z_i^T)
+        #   - Across-effect observed correlations corr(us[i], us[j]) will be close to the input C[i,j]
+        #     (subject to sampling noise), thanks to the kappa calibration + correlation projection. 
+        
+        if debug:
+            debug_info = {
+                'K': Ks,
+                'S': Ss,
+                'kappa': kappa,
+                'C_calibrated': C_cal,
+                'C_input': C,
+                'C_observed': np.corrcoef(np.vstack(us))
+            }
 
     # creates a dictionary of random effects
     random_effects = {
         'name': names,
         'var': variances,
         'corr': C,
-        'Sigma': Sigma if C is not None else None,
         'Z': Zs,
         'A': As,
         'u': us
     }
+    if debug and C is not None:
+        random_effects['debug'] = debug_info
     return random_effects
 
 #################################
