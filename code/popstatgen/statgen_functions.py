@@ -145,6 +145,20 @@ def nearest_correlation_matrix(X, eps_eig=1e-12):
     np.fill_diagonal(Ccorr, 1.0)
     return Ccorr
 
+# The following function was written (almost) entirely by ChatGPT 5
+def _get_kappa(Ks: list[np.ndarray],Ss: list[np.ndarray]) -> np.ndarray:
+    M = len(Ks)
+    trKi = np.array([np.trace(Ks[i]) for i in range(M)], dtype=float)
+    kappa = np.eye(M, dtype=float)
+    for i in range(M):
+        for j in range(i+1, M):
+            kij = float(np.trace(Ss[i] @ Ss[j]) / np.sqrt(trKi[i] * trKi[j]))
+            # numerical guard into [0,1]
+            kij = min(max(kij, 0.0), 1.0)
+            kappa[i, j] = kappa[j, i] = kij
+    return kappa
+
+# much of the code related to correlated random effects was written (almost) entirely by ChatGPT 5
 def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: list[float],
                        C: np.ndarray = None, names: list[str] = None,
                        replace_random: list[np.ndarray] = None, debug: bool = False) -> dict:
@@ -176,11 +190,14 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
 
     # checks if user provided random effects to replace
     scores = [None] * M
+    i_random = list(range(M)) # indices of random effects
+    i_fixed = [] # indices of fixed effects
     if replace_random is not None:
         # this just ensures that the list is of length M, even if user provided a shorter list
         for i in range(M):
             if replace_random[i] is not None:
                 scores[i] = replace_random[i]
+                i_fixed.append(i)
 
     rng = np.random.default_rng()
     # independent random effects
@@ -189,11 +206,9 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         # generates random effects for each cluster for each component
         for i in range(M):
             N_i = As[i].shape[0]
-            #u_i = rng.multivariate_normal(mean=np.zeros(N_i), cov=variances[i] * As[i])
-            eps = rng.standard_normal(N_i) # ~ N(0, I_{N_i})
-            L = np.linalg.cholesky(0.5*(As[i]+As[i].T) + 1e-12*np.eye(N_i)) # As[i] = L L^T
-            g = L @ eps # cluster effects ~ N(0, A_i)
-            u_i = np.sqrt(variances[i]) * (Zs[i] @ g)
+            z_i = rng.standard_normal(N_i) # ~ N(0, I_{N_i}), "z-score"
+            L_i = np.linalg.cholesky(0.5*(As[i]+As[i].T) + 1e-12*np.eye(N_i)) # As[i] = L L^T
+            u_i = np.sqrt(variances[i]) * (Zs[i] @ L_i @ z_i) # u_i ~ N(0, var_i Z_i A_i Z_i^T)
             us.append(u_i)
 
     # correlated random effects
@@ -202,8 +217,6 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         if C.shape[0] != M or C.shape[1] != M:
             raise ValueError("Correlation matrix must be of shape M*M, where M is the number of random effects.")
         
-        # the following blocks of code were written (almost) entirely by ChatGPT 5
-
         ## step 1: build individual-level kernels & their square roots ##
         N = Zs[0].shape[0]
         vars = np.asarray(variances, dtype=float)
@@ -221,20 +234,9 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         # We want the *observed* across-individual Pearson correlation between u_i and u_j
         # to match the input C[i,j]. Under the LMC construction (below), its expectation is
         #   E[corr(u_i, u_j)] ≈ C_input[i,j] * kappa[i,j]
-        # where
-        #   kappa[i,j] = tr(S_i S_j) / sqrt(tr(S_i S_i) tr(S_j S_j))
-        # and tr(S_i S_i) = tr(K_i) because S_i S_i^T = K_i.
-        trKi = np.array([np.trace(Ks[i]) for i in range(M)], dtype=float)
-
-        kappa = np.eye(M, dtype=float)
-        for i in range(M):
-            for j in range(i+1, M):
-                num = np.trace(Ss[i] @ Ss[j])  # tr(S_i S_j)
-                den = np.sqrt(trKi[i] * trKi[j])
-                kij = float(num / den)
-                # numerical guard into [0,1]
-                kij = min(max(kij, 0.0), 1.0)
-                kappa[i, j] = kappa[j, i] = kij
+        # where: kappa[i,j] = tr(S_i S_j) / sqrt(tr(S_i S_i) tr(S_j S_j))
+        # and: tr(S_i S_i) = tr(K_i) because S_i S_i^T = K_i.
+        kappa = _get_kappa(Ks, Ss)  # shape M x M
         # check if any requested correlations are too high with LMC
         too_high = np.abs(C) > (kappa + 1e-12)
         if np.any(too_high):
@@ -250,7 +252,6 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         # Target observed correlation is C; we need to "pre-whiten" it by kappa so that
         #   observed ≈ C_calibrated ∘ kappa  (∘ = Hadamard on the *M x M* effect space),
         # i.e., C_calibrated[i,j] = C[i,j] / kappa[i,j] for i != j.
-        C = np.asarray(C, dtype=float)
         C_cal = C.copy()
         for i in range(M):
             for j in range(M):
@@ -268,10 +269,7 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
 
         ## step 4: sample via LMC with the calibrated effect correlation ##
         # Factor C_cal = L L^T. Use Cholesky with tiny jitter for stability.
-        try:
-            L = np.linalg.cholesky(C_cal)
-        except np.linalg.LinAlgError:
-            L = np.linalg.cholesky(C_cal + 1e-12 * np.eye(M))
+        L = np.linalg.cholesky(C_cal + 1e-12 * np.eye(M))
 
         # Draw M latent standard normal fields over individuals (each is length-N)
         Z_latent = rng.standard_normal(size=(N, M))  # columns z_q
@@ -293,8 +291,7 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         # Mix them across effects: Y = Z_latent @ L.T, so column i is y_i = sum_q L[i,q] z_q
         Y = Z_latent @ L.T  # shape (N, M)
 
-        # Build the M random effects:
-        #   u_i = sqrt(var_i) * S_i @ y_i
+        # Build the M random effects: u_i = sqrt(var_i) * S_i @ y_i
         us = []
         for i in range(M):
             u_i = np.sqrt(vars[i]) * (Ss[i] @ Y[:, i])
