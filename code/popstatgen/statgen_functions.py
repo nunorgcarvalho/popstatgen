@@ -147,6 +147,11 @@ def nearest_correlation_matrix(X, eps_eig=1e-12):
 
 # The following function was written (almost) entirely by ChatGPT 5
 def _get_kappa(Ks: list[np.ndarray],Ss: list[np.ndarray]) -> np.ndarray:
+    # We want the *observed* across-individual Pearson correlation between u_i and u_j
+    # to match the input C[i,j]. Under the LMC construction (below), its expectation is
+    #   E[corr(u_i, u_j)] ≈ C_input[i,j] * kappa[i,j]
+    # where: kappa[i,j] = tr(S_i S_j) / sqrt(tr(S_i S_i) tr(S_j S_j))
+    # and: tr(S_i S_i) = tr(K_i) because S_i S_i^T = K_i.
     M = len(Ks)
     trKi = np.array([np.trace(Ks[i]) for i in range(M)], dtype=float)
     kappa = np.eye(M, dtype=float)
@@ -176,7 +181,7 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         random_effects (dict): Dictionary of relevant pieces of random effects, where each value in the dictionary is a list of the same length as the number of random effects.
     '''
     # number of components
-    M = len(Zs)
+    M = len(As)
     # names components if not given
     if names is None:
         names = [f"RE_{i}" for i in range(M)]
@@ -198,6 +203,7 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
             if replace_random[i] is not None:
                 scores[i] = replace_random[i]
                 i_fixed.append(i)
+                i_random.remove(i)
 
     rng = np.random.default_rng()
     # independent random effects
@@ -219,7 +225,7 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         
         ## step 1: build individual-level kernels & their square roots ##
         N = Zs[0].shape[0]
-        vars = np.asarray(variances, dtype=float)
+        vars_arr = np.asarray(variances, dtype=float)
 
         # Individual-level covariance *kernels* (correlations if As are correlations and Z is 0/1)
         #   K_i = Z_i A_i Z_i^T  (shape N x N)
@@ -229,32 +235,62 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         # These are the "feature maps" that carry the within-effect structure for effect i.
         Ss = [psd_sqrt(Ks[i], clip=0.0) for i in range(M)]
 
-        ## step 2: compute kappa shrinkage factors ##
-
-        # We want the *observed* across-individual Pearson correlation between u_i and u_j
-        # to match the input C[i,j]. Under the LMC construction (below), its expectation is
-        #   E[corr(u_i, u_j)] ≈ C_input[i,j] * kappa[i,j]
-        # where: kappa[i,j] = tr(S_i S_j) / sqrt(tr(S_i S_i) tr(S_j S_j))
-        # and: tr(S_i S_i) = tr(K_i) because S_i S_i^T = K_i.
         kappa = _get_kappa(Ks, Ss)  # shape M x M
-        # check if any requested correlations are too high with LMC
-        too_high = np.abs(C) > (kappa + 1e-12)
-        if np.any(too_high):
-            pairs = np.argwhere(too_high)
-            for i, j in pairs:
-                if i < j:
-                    print(f"Requested |C[{i},{j}]|={abs(C[i,j]):.3f} exceeds "
-                        f"max achievable kappa[{i},{j}]={kappa[i,j]:.3f}. "
-                        f"Observed corr will cap at ~{np.sign(C[i,j])*kappa[i,j]:.3f}.")
+        # check if any requested (random) correlations are too high with LMC
+        for a, i in enumerate(i_random):
+            for b, j in enumerate(i_random):
+                if a < b and abs(C[i,j]) > kappa[i,j] + 1e-12:
+                    print(f"|C[{i},{j}]|={abs(C[i,j]):.3f} exceeds kappa={kappa[i,j]:.3f};"
+                          f" will cap at ~{np.sign(C[i,j])*kappa[i,j]:.3f}")
 
-        ## step 3: calibrate effect-correlation to hit observed C ##
+
+        # Draw M latent standard normal fields over individuals (each is length-N)
+        Z_latent = rng.standard_normal(size=(N, M))  # columns z_q
+        us = [None] * M # stores random effects (including those that become fixed)
+        R = np.zeros((M, M), dtype=float)
+
+        # replaces columns of random effects with provided values if given
+        for i in i_fixed:
+            # centers provided scores if they're not zero-centered
+            scores_i = scores[i] - scores[i].mean()
+            S_p = psd_sqrt(Ks[i], pinv=True) # K_i^{+1/2}
+
+            if np.std(scores_i) == 0:
+                raise ValueError(f"Provided random effect for component {i} has zero variance.")
+            # gets equivalent z-score, although this isn't necessarily var=1, but
+            # later when generating u, the variance is correct
+            z_scores_i = (S_p @ scores_i) / np.std(scores_i) 
+            Z_latent[:, i] = z_scores_i # replaces z-score
+            # stores fixed effect
+            us[i] = np.sqrt(vars_arr[i]) * (Ss[i] @ Z_latent[:, i])
+
+            nu = float((Z_latent[:, i] @ Z_latent[:, i]) / N) # empirical variance
+            # determines the correlation between fixed and real effects
+            for j in i_random:
+                vj = Ss[j] @ Z_latent[:,i] # S_j z_fixed
+                A  = float(us[i] @ vj / (np.linalg.norm(us[i]) + 1e-15))
+                B  = float(vj @ vj)
+                T  = float(np.trace(Ks[j]))
+                c_star = float(C[i, j]) # desired observed corr with fixed effect
+                c_max  = 0.0 if B == 0 else A / np.sqrt(B)
+                c_tgt  = float(np.clip(c_star, -abs(c_max), abs(c_max)))
+                denom  = A*A - c_tgt*c_tgt*(B - nu*T)
+                if denom <= 0:
+                    rho = np.sign(c_tgt) * 1.0
+                else:
+                    rho2 = np.clip((c_tgt*c_tgt)*T / denom, 0.0, 1.0)
+                    rho  = np.sign(c_tgt) * np.sqrt(rho2)
+                R[j, i] = rho
+        # subsets to only (random x fixed) effects
+        R = R[np.ix_(i_random, i_fixed)]
 
         # Target observed correlation is C; we need to "pre-whiten" it by kappa so that
         #   observed ≈ C_calibrated ∘ kappa  (∘ = Hadamard on the *M x M* effect space),
         # i.e., C_calibrated[i,j] = C[i,j] / kappa[i,j] for i != j.
+        # only applicable to non-fixed effects
         C_cal = C.copy()
-        for i in range(M):
-            for j in range(M):
+        for i in i_random:
+            for j in i_random:
                 if i == j:
                     C_cal[i, j] = 1.0
                 else:
@@ -263,30 +299,54 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
                     else:
                         # If kappa=0, the two effects share no common modes; the observed corr must be ~0.
                         C_cal[i, j] = 0.0
-
+        # subsets to only random effects
+        C_cal = C_cal[np.ix_(i_random, i_random)]
         # Project to the nearest valid correlation matrix (symmetric, PSD, diag=1)
         C_cal = nearest_correlation_matrix(C_cal, eps_eig=1e-12)
 
-        ## step 4: sample via LMC with the calibrated effect correlation ##
-        # Factor C_cal = L L^T. Use Cholesky with tiny jitter for stability.
-        L = np.linalg.cholesky(C_cal + 1e-12 * np.eye(M))
+        # # Calculates L for the random effects only
+        # Res = C_cal - R @ R.T
+        # # ensures Res is PSD
+        # # row-wise remaining variance (must be >= 0); s_j^2 = diag(Res)
+        # s = np.sqrt(np.clip(1.0 - np.sum(R**2, axis=1), 0.0, None))
+        # # Normalize to a correlation-like matrix and project to PSD
+        # with np.errstate(divide='ignore', invalid='ignore'):
+        #     Dinv = np.diag(np.where(s > 0, 1.0/s, 0.0))
+        # Q = Dinv @ Res @ Dinv
+        # Q = nearest_correlation_matrix(Q, eps_eig=1e-12)
+        # # Put the scale back and factor
+        # Res_psd = np.diag(s) @ Q @ np.diag(s)
+        # L_random = np.linalg.cholesky(0.5*(Res_psd + Res_psd.T) + 1e-12*np.eye(len(i_random)))
 
-        # Draw M latent standard normal fields over individuals (each is length-N)
-        Z_latent = rng.standard_normal(size=(N, M))  # columns z_q
+        # Build Z_f (N x k) and its Gram G_f (k x k)
+        Z_f = np.column_stack([Z_latent[:, i] for i in i_fixed]) if i_fixed else np.zeros((N,0))
+        # (columns should already be mean ~0 from your centering; optionally enforce)
+        if Z_f.size:
+            Z_f = Z_f - Z_f.mean(axis=0, keepdims=True)
+        G_f = (Z_f.T @ Z_f) / N  # fixed-latent covariance across individuals
 
-        # replaces columns of random effects with provided values if given
-        for i in range(M):
-            if scores[i] is not None:
-                # centers provided scores if they're not zero-centered
-                scores_i = scores[i] - scores[i].mean()
-                S_p = psd_sqrt(Ks[i], pinv=True) # K_i^{+1/2}
-                # gets equivalent z-score, although this isn't necessarily var=1, but
-                # later when generating u, the variance is correct
-                z_scores_i = (S_p @ scores_i) / np.std(scores_i) 
-                Z_latent[:, i] = z_scores_i # replaces z-score
-                # replaces part of the L matrix to ensure no extra noise is added
-                L[i, :] = 0.0
-                L[i, i] = 1.0
+        # R is (len(i_random) x len(i_fixed))
+        # Target Y-level correlation among random effects after κ-cal:
+        #   Cov(Y_random) target = C_cal
+        # Contribution from fixed cols = R @ G_f @ R^T
+        Res = C_cal - R @ G_f @ R.T
+
+        # Ensure correct diagonals & PSD via correlation projection
+        diag_left = np.clip(np.diag(Res), 0.0, None)
+        s = np.sqrt(diag_left)
+        with np.errstate(divide='ignore', invalid='ignore'):
+            Dinv = np.diag(np.where(s > 0, 1.0/s, 0.0))
+        Q = Dinv @ Res @ Dinv
+        Q = nearest_correlation_matrix(Q, eps_eig=1e-12)
+        Res_psd = np.diag(s) @ Q @ np.diag(s)
+
+        L_random = np.linalg.cholesky(0.5*(Res_psd + Res_psd.T) + 1e-12*np.eye(len(i_random)))
+
+        # Makes L lower-triangular by combining fixed and random effects
+        L = np.zeros((M,M), dtype=float)
+        L[np.ix_(i_fixed, i_fixed)] = np.eye(len(i_fixed))
+        L[np.ix_(i_random, i_random)] = L_random
+        L[np.ix_(i_random, i_fixed)] = R
 
         # Mix them across effects: Y = Z_latent @ L.T, so column i is y_i = sum_q L[i,q] z_q
         Y = Z_latent @ L.T  # shape (N, M)
@@ -294,14 +354,8 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
         # Build the M random effects: u_i = sqrt(var_i) * S_i @ y_i
         us = []
         for i in range(M):
-            u_i = np.sqrt(vars[i]) * (Ss[i] @ Y[:, i])
-            us.append(u_i)
-
-        # After this:
-        #   - us is a list of length M; each us[i] is a length-N vector (the random effect for effect i)
-        #   - Var(us[i]) ≈ vars[i] * (Z_i A_i Z_i^T)
-        #   - Across-effect observed correlations corr(us[i], us[j]) will be close to the input C[i,j]
-        #     (subject to sampling noise), thanks to the kappa calibration + correlation projection. 
+            u_i = np.sqrt(vars_arr[i]) * (Ss[i] @ Y[:, i])
+            us.append(u_i) 
         
         if debug:
             debug_info = {
@@ -312,8 +366,8 @@ def get_random_effects(Zs: list[np.ndarray], As: list[np.ndarray], variances: li
                 'C_input': C,
                 'C_observed': np.corrcoef(np.vstack(us)),
                 'Z_latent': Z_latent,
-                'L': L,
-                'Y': Y
+                'Y': Y,
+                'L': L
             }
 
     # creates a dictionary of random effects
