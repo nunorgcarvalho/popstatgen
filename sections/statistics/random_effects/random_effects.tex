@@ -1,0 +1,124 @@
+\documentclass[12pt]{article}
+
+% loads config.sty
+\makeatletter
+\def\input@path{{../../../}}
+\makeatother
+\usepackage{config}
+\usepackage{macros}
+\usepackage{bookmark}
+
+\title{Random Effects}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+This document describes the math behind simulating random effects as implemented by the popstatgen package.
+Large portions are adapted from Wikipedia articles relating to the relevant topics.
+
+\section{Covariance and Correlation Matrices}
+\subsection{Covariance Matrix}
+We define a vector consisting of $N$ random variables:
+$$ \bX = (X_1 , X_2, ..., X_N)^{\T} $$
+
+The covariance matrix of such a vector, $\bK_X$, is an $N \times N$ matrix where the $(i,j)\textsuperscript{th}$ element represents the covariance between $X_i$ and $X_j$:
+$$ K_{X,ij} = \Cov[X_i,X_j] = \E[(X_i - \E[X_i]) (X_j - \E[X_j])]$$
+Diagonal elements of $\bK_X$, where $i=j$, describe the variance of the $X_i$ random vector.
+Each random variable $X_i$ is allowed to have its own variance, $\sigma_{X_i}^2$.
+
+\subsection{Correlation Matrix}
+We can standardize each random variable to by subtracting its expected value and dividing it by its standard deviation, $Z_i = \frac{X_i - \E[X_i]}{\sigma_{X_i}}$.
+The covariance matrix of such transformed set of variables is the Pearson correlation matrix, $\bR_X$, where element $(i,j)$ is the correlation between $X_i$ and $X_j$. 
+Definitionally, the diagonal of $\bR_X$ solely consists of 1s.
+
+Note that $K_{X,ij} = R_{X,ij} \sigma_{X_i} \sigma_{X_j}$. We can write this in terms of their respective matrices by defining $\bsigma_X = (\diag[\bK_X])^{-\frac12} =  (\bone (\sigma_{X_1}, \sigma_{X_2}, ..., \sigma_{X_N})^{\T}) \circ  \bI_N$ as the $N \times N$ diagonal matrix with random variable standard deviations on the diagonal, allowing us to write:
+$$ \bK_X = \bsigma_X \bR_X \bsigma_X $$
+
+In cases where the variance of each random variable $X_i$ is identical, $\sigma_X$, we can just write:
+$$ \bK_X = \sigma_X^2 \bR_X $$
+
+\subsection{Properties of the covariance matrix}
+Both the covariance matrix and correlation matrix have the same properties relevant to this article.
+
+\subsubsection{Symmetric}
+The covariance matrix $\bK$ is symmetric.
+This means it equals its own transpose:
+$$\bK = \bK^{\T} $$
+By implication, $K_{ij} = K_{ji}$ for all $i$ and $j$.
+
+\subsubsection{Positive semi-definite}
+The covariance matrix $\bK$ is positive semi-definite (PSD).
+This property can only apply to symmetric matrices and means that for any non-zero vector $\bx$ of size $N$, $\bx^{\T} \bK \bx $ is a non-negative (i.e. positive of zero) value:
+$$ \bx^{\T} \bK \bx \geq 0 \text{ for all } \bx \in \mathbb{R}^N $$
+
+\section{Uncorrelated Random Effects}
+We can reverse our understanding from above and define a random vector that follows a specified covariance structure.
+For example, a random vector drawn from a multivariate normal distribution,
+$$ \bX \sim \N (0, \bK_X) , $$
+will have an expected covariance matrix of $\bK_X$.
+From now on, we will assume that $\bX_X$ consists of just the same random variable, $X$, meaning that all diagonal entries of $\bK_X$ are the same and equal to the expected variance of $\bX_X$:
+$$ \bX_X \sim \N (0,\sigma_X^2 \bR_X) $$
+
+\subsection{Simple random effects example}
+Consider a vector of size $N$ describing some trait in a population, $\bY$.
+We define it as follows:
+$$\bY = \bX + \bepsilon$$
+where $\bX$ is the random vector we described earlier and $\bepsilon$ is a random noise term drawn as:
+$$ \bepsilon \sim \N (0, \sigma_\epsilon^2)$$
+We can think of $\bX$ as a random effect on $\bY$ with a variance of $\sigma_X$.
+If the variance of $\bY$ is 1, this is the proportion of variance in $\bY$ explained by $\bX$.
+Furthermore, $\bX$ has a correlation structure defined by $\bR_X$.
+One can think of $\bR_X$ as defining the degree of similarity in the effect of $X$ on pairs of individuals.
+For example, if $Y$ is a trait affected by a culmination of region-related factors captured by $X$, then $\bR_X$ might capture the physical proximity of individuals in the sample, as individuals living closer together will face similar region-related effects.
+Note that $\bR_X$ must be encoded such that greater proximity yields values closer to 1.
+
+Technically, $\bepsilon$ can also be thought of as a random effect with variance $\sigma_\epsilon^2$ but a correlation matrix of $\bI_N$.
+This just means an individual's $\epsilon$ effect is completely uncorrelated with any other individual's  $\epsilon$ effect.
+Typically, such effects that are purely random with no correlation structure are referred to as noise.
+
+\subsubsection{Discrete clusters with correlation structure}
+In the above example, $\bR_X$ is thought to be capturing proximity between individuals.
+Perhaps we don't have sufficient granularity to measure the proximity between two individuals, but we do know the broad-level region (e.g. city) that each individual belongs to.
+Generalizing outside fo this example, we refer to these regions as clusters.
+We can define a $N \times N_X$ design matrix $\bZ_X$ that maps the $N$ samples to $N_X$ clusters. In our example,
+$Z_{X,ij} = 1$ if individual $i$ lives in region $j$ and $ Z_{X,ij} = 0$ otherwise.
+
+\emph{[ Can individuals be mapped to multiple regions? Or does every row have to add to 1? And if so, then can there be fractional apportionment of an individual to different clusters?] }
+
+Defining such a matrix allows us to define a smaller $N_X \times N_X$ correlation matrix for the clusters, $\bA_X$, capturing the physical proximity between cities in our example.
+We'll continue to assume that the random effects coming from each cluster have the same variance, $\sigma_X$.
+
+We can define our $N \times N$ sample-level covariance matrix under this new parameterization as $\bK_X = \sigma_X^2 \bZ_X \bA_X \bZ_X^{\T}$, also allowing us to redefine the distribution of the random effect itself:
+$$ \bX \sim \N (0, \sigma_X^2 \bZ_X \bA_X \bZ_X^{\T} ) $$
+If your sample consists of no discrete clusters (or you want to think of each sample as forming its own cluster), then $\bZ_X$ is simply an $N \times N$ identity matrix, and $\bA_X$ is also an $N \times N$ matrix, equivalent to the $\bR_X$ matrix we defined earlier.
+We'll continue with this parameterization for the sake of generality, but in applications where the clusters are simpy the individual samples themselves, the $\bZ$ matrices can be "ignored" from the equations as they are just identity matrices.
+
+\subsection{Sampling uncorrelated random effects}
+We'll now generalize to the case where there are $M$ distinct random effects affecting some outcome (e.g. $Y$ from earlier).
+We will use the notation $\bu_i$ to denote the size-$N$ vector containing the effects of the $\ith$ random effect.
+In other words, if the $\bX$ random effect we defined earlier is the $\ith$ random effect, then $\bu_i = \bX$. 
+The subscript $i$ will be used for the random effect-specific variables we've defined so far, e.g., $\sigma_i$, $\bK_i$, $\bA_i$, and $\bZ_i$.
+
+
+In this section, random effects being \emph{uncorrelated} refers to there being an expected correlation/covariance of 0 between the random effect vectors of any two random variables:
+$$ \Corr[\bu_i, \bu_j] = 0 $$
+This can be thought of as the cross-effect correlation.
+Note that there is still the within-effect correlation, defined by $\bA_i$, which describes the correlation of a a specific random effect's values between samples.
+Our random effects can have within-effect correlation but no cross-effect correlation.
+
+\subsubsection{Sampling through a multivariate normal}
+Each random effect vector can be drawn from a multivariate normal with covariance matrix $\bK_i$, exactly as described earlier:
+$$ \bu_i \sim \N (0, \bK_i) $$
+where $\bK_i = \sigma_i^2 \bZ_i \bA_i \bZ_i^{\T} $.
+This is done for each random effect.
+
+\subsubsection{Sampling through Cholesky decomposition}
+An alternate but equivalent way to conceptualize this sampling is to begin by drawing a standard normal variable:
+$$ z_i = \N(0,1) $$
+which we will multiply by some matrix that induces the correlation between samples implied by $\bZ_i \bA_i \bZ_i^{\T}$.
+
+...
+
+\end{document}
