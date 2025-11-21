@@ -114,16 +114,16 @@ Therefore, the MLE should get closer to the true parameter value.
 
 While the first derivative describes the rate of change of the likelihood function, the second derivative describes its curvature.
 At the MLE, a strong curvature (high magnitude) means the likelihood peaks very sharply at the MLE.
-Therefore, a small change in the paramater value(s) from the MLE leads to a sharp drop drop in the likelihood.
+Therefore, a small change in the paramater value(s) from the MLE leads to a sharp drop in the likelihood.
 In contrast, if there is weak curvature (low magnitude) at the MLE, then there is a wide region of parameter estimates that yield similar (albeit slightly lower) likelihoods of producing the data.
 
 \subsubsection{The Hessian}
-For $M$ parameters, the second derivative of the log-likelihood function is the \textbf{Hessian} ($\bH$), an $M \times M$ matrix where:
+For $M$ parameters, the second derivative of the log-likelihood function is the \textbf{Hessian} ($\bH$), an $M \times M$ symmetric matrix where:
 $$
 H_{ij} = \frac{ \partial^2 \LL(\Theta | \by)
     }{ \partial \Theta_i \partial \Theta_j}
 $$
-This is also called the gradient and can be evaluated at any set of parameter values, descrbing the multi-dimensional curvature of the log-likelihood at that set of parameters.
+This is also called the gradient and can be evaluated at any set of parameter values, describing the multi-dimensional curvature of the log-likelihood at that set of parameters.
 
 \subsubsection{The Fisher information Matrix}
 Of mathematical interest to us is the negative expected value of the Hessian, which is called the \textbf{Fisher information matrix}:
@@ -132,8 +132,8 @@ Note that the expected value here is taken by averaging across all the data that
 This means that while the Hessian is a function that depends on both the parameters and the data that is observed, the Fisher information matrix only depends on the parameters.
 That is why $- \bH(\bTheta)$ is often called the \textbf{observed information matrix}, while $\mathcal{I}(\bTheta)$ is the \textbf{expected information matrix}.
 
-As sample size increases, the Fisher information matrix converges to the negative of the Hessian evaluated at the MLE:
-$$ \mathcal{I}(\hat{\bTheta}) \approx \bH(\hat{\bTheta}) $$
+As sample size increases, the Fisher information matrix evaluated at the MLE converges to the negative of the Hessian evaluated at the MLE, since the distribution of the observed data increasingly resembles the true distribution of the possible data that is generated:
+$$ \mathcal{I}(\hat{\bTheta}) \approx -\bH(\hat{\bTheta}) $$
 
 \subsubsection{Asymptotic normality of the MLE}
 If our likelihood function follows \href{https://en.wikipedia.org/wiki/Fisher_information#Regularity_conditions}{some regularity conditions}, as sample size increases, the sampling distribution of the MLE (that is, the distribution of the MLE for different samples of observed data from the same underlying data-generating process) converges to normality. This is called \textbf{asymptotic normality} and can be written formally as:
@@ -154,7 +154,7 @@ The i\sps{th} diagonal element is the variance of the MLE for the i\sps{th} para
 The element (i,j) is the covariance of the MLE for the i\sps{th} and j\sps{th} parameters.
 
 \section{Restricted Maximum Likelihood (REML)}
-Maximum likelihood estimation is often applied in the context of a mixed model:
+Maximum likelihood estimation is often applied in the context of a linear mixed model:
 $$
 \by = \bX \bbeta + \bu + \bepsilon
 $$
@@ -168,7 +168,7 @@ In practice, solving for the set of parameters that makes the score of the likel
 Instead, there are algorithms that start with a guess for the parameter estimates, and then iteratively move closer and closer to the parameter values that maximize the likelihood of the observed data.
 Eventually, the algorithm gets close enough to the MLE that the parameter estimate at each iteration no longer changes by much, and thus we decide on a cutoff point where we declare that the algorithm has converged on the MLE.
 
-Broadly, the strategy of these methods is to randomly choose (or have the user specificy) a location in the parameter landscape, where the height of the landscape at that set of parameter values is the log-likelihood of those values generating the observed data.
+Broadly, the strategy of these methods is to randomly choose (or have the user specify) a location in the parameter landscape, where the height of the landscape at that set of parameter values is the log-likelihood of those values generating the observed data.
 The algorithm can't look very far from its position with confidence, but it can look at how the landscape height (the log-likelihood function) changes at its location.
 This can be simply the rate of change (first derivative) or also the curvature (second derivative).
 It then uses this information to predict the direction and distance of where the the landscape height should reach its maximum (the MLE) and goes to it.
@@ -248,11 +248,11 @@ First, it is often easier to compute the Fisher information matrix than the Hess
 The Hessian will usually be a function of both the unknown parameters we are trying to estimate (which are set to the current iteration's MLE when evaluating it) as well as unbiased estimates of said parameters that are computed directly from the observed data.
 Since these estimates from the data are unbiased, on expectation across different data samples (generated from the current MLE), those estimates will exactly equal their respective parameters.
 This often leads to terms cancelling out, simplifying the equation significantly.
-Second, the Fisher-Scoring method also appears to be better at converging correctly from different starting points compared to Newton-Raphson (according to Jenrich and Sampson 1986).
+Second, the Fisher-Scoring method also appears to be better at converging correctly from different starting points compared to Newton-Raphson (according to [Jenrich and Sampson, 1986]).
 
 \subsubsection{Average Information}
 
-The Average Information method uses the average of the expected and observed information matrices evaluated the current iteration's MLE as the second derivative of the log-likelihood. Defining this matrix as $\mathbf{AI}$, it is:
+The Average Information method uses the average of the expected and observed information matrices evaluated at the current iteration's MLE as the second derivative of the log-likelihood. Defining this matrix as $\mathbf{AI}$, it is:
 $$
 \mathbf{AI}(\bTheta) = \frac{1}{2}
 (\mathcal{I}(\bTheta) - \bH(\bTheta))  
@@ -308,12 +308,12 @@ Where:
         \item $\bZ_{M+1} = \bI_{N}$
     \end{itemize}
     \item $\bu_i$: the $i \sps{th}$ set of random effects.
-    $N_i \times 1$ vector. Assumed to be drawn from a normal distribution:
+    $N_i \times 1$ vector. Assumed to be drawn from a multivariate normal distribution:
     $\bu_i \sim \N(0, \sigma^2_i \bA_i)$
     \begin{itemize}
         \item $\sigma^2_i$: variance of the $i \sps{th}$ random effect component.
         This is what we are often interested in estimating.
-        \item $\bA_i$: relationship matrix for the $i \sps{th}$ random effect componnt.
+        \item $\bA_i$: relationship matrix for the $i \sps{th}$ random effect component.
         $N_i \times N_i$ matrix.
         This encodes the similarity between clusters for some component of interest.
         \begin{itemize}
@@ -366,12 +366,10 @@ $$
 $$
 This projection matrix has the neat property that:
 $$ \bP \by = \bV^{-1} (\by - \bX \hat{\bbeta}) $$
-It projects the outcomes $\by$ onto a residual space that has subtracted out the fixed effects (it is orthogonal to $\bX$), while also accounting for the correlation of those residuals that is implied by $\bV$.
+It projects the outcomes $\by$ onto a residual space that has subtracted out the fixed effects (i.e., it is orthogonal to $\bX$), while also accounting for the correlation of those residuals that is implied by $\bV$.
 By considering simpler scenarios, $\bP$ simplifies to perhaps more intuitive or familiar forms.
 For example, if there are fixed effects and the random components are independent from each other, e.g. $\by = \bX \bbeta + \bepsilon$, then $\bV^{-1} = \bI$, and so $\bP = \bI - \bX (\bX^{\T} \bX)^{-1} \bX^{\T}$.
 This is the residual maker matrix in ordinary least squares (OLS).
-Alternatively, if there are random components that are non-independent but no fixed effects, then $\bP = \bV^{-1}$.
-This is the form that would be used under ML implementation, as opposed to REML.
 
 Note that this matrix needs to be computed at every iteration of parameter estimation, since $\bP^{(k)}$ is a function of the current parameter estimates, $\bTheta^{(k)}$.
 
