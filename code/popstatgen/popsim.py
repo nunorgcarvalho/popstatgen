@@ -95,9 +95,10 @@ class Population:
         self.past = [self]
         for _ in range(keep_past_generations):
             self.past.append(None) # initializes past generations' objects as None
+        Haplos = np.full_like(H, -1, dtype=int) # initializes haplotype ID array with -1s
 
         # further attributes
-        self._update_obj(H=H, update_past=False)
+        self._update_obj(H=H, Haplos=Haplos, update_past=False)
         self.relations = pop.initialize_relations(self.N)
 
         # defines metrics
@@ -112,26 +113,40 @@ class Population:
         '''
         self.R = 0.5 * np.ones(self.M)
 
+    def set_founding_haplotypes(self):
+        '''
+        Generates a complementary haplotype array for each individual containing a haplotype identifier for each allele. This functions treats the current generation as founders (individuals are unrelated from each other) such that each of their chromosomes has a unique identifier for all alleles in it. Subsequent generations can then track the inheritance of these founding haplotypes. Haplotypes are given an integer in the order they appear in the haplotype array.
+        '''
+        ids = np.arange(self.N * self.P, dtype=np.int32).reshape(self.N, self.P)
+        Haplos = np.broadcast_to(ids[:, None, :], self.H.shape).copy()
+        self._update_obj(Haplos=Haplos)
+
+
     ###################################
     #### Storing object attributes ####
     ###################################
 
     def _update_obj(self, H: np.ndarray = None, update_past: bool = True,
-                    relations: dict = None):
+                    relations: dict = None, Haplos: np.ndarray = None):
         '''
         Update the population object's attributes.
         Parameters:
             H (3D array): Haplotype array.
             update_past (bool): Whether to update the memory of past generations. Default is True.
             relations (dict): Dictionary of relationship matrices to update. If None, does not update relationships. Default is None.
+            Haplos (3D array): Haplotype identifier array. If None, does not update haplotype identifiers. Default is None.
         '''
+        # keep this before updating anything else
         if update_past:
             self._update_past()
+        
         if H is not None:
             self.H = H
             self.G = pop.make_G(self.H)
             self.p = pop.compute_freqs(self.G, self.P)
             self.X = pop.standardize_G(self.G, self.p, self.P, impute=True, std_method='observed')
+        if Haplos is not None:
+            self.Haplos = Haplos
         if relations is not None:
             self._update_relations(relations)
 
@@ -377,12 +392,13 @@ class Population:
         # loops through each generation
         for t in range(generations):
             if related_offspring:
-                (H, relations) = self.generate_offspring(**kwargs)
+                (H, relations, Haplos) = self.generate_offspring(**kwargs)
             else:
                 H = self.next_generation(**kwargs)
+                Haplos = np.full_like(H, -1, dtype=int) # unrelated haplotypes
                 relations = None
             # updates objects and past
-            self._update_obj(H=H, update_past=True, relations=relations)
+            self._update_obj(H=H, update_past=True, relations=relations, Haplos=Haplos)
             # records metrics
             self._update_temp_metrics(t, G=self.G)
             if trait_updates:
@@ -501,6 +517,7 @@ class Population:
 
         rel_parents = np.zeros((N_offspring, self.N), dtype=bool) # relationship matrix for parent-child relationships
         H = np.empty((N_offspring, self.M, self.P), dtype=int)
+        Haplos = np.full_like(H, -1) # initializes haplotype ID array with -1s
         for i in np.arange(N_offspring):
             iM = parents[i,0]
             iP = parents[i,1]
@@ -509,8 +526,19 @@ class Population:
             haploP = self.H[iP, np.arange(self.M), haplo_ks[i, :, 1]]
             haplos = np.stack((haploM, haploP), axis = 1)
             # shuffles haplotypes around
-            haplos = haplos[:,np.random.choice(self.P, size=self.P, replace=False)]
+            chr_order = np.random.choice(self.P, size=self.P, replace=False)
+            haplos = haplos[:,chr_order]
             H[i,:,:] = haplos
+
+            # does same inheritance for haplotype IDs (instead of allele dosages)
+            # (yes, I know it's confusing that I am using haplo to refer to both)
+            HaploM = self.Haplos[iM, np.arange(self.M), haplo_ks[i, :, 0]]
+            HaploP = self.Haplos[iP, np.arange(self.M), haplo_ks[i, :, 1]]
+            Haplos_i = np.stack((HaploM, HaploP), axis = 1)
+
+            Haplos_i = Haplos_i[:,chr_order]
+            Haplos[i,:,:] = Haplos_i
+
             # updates relationship matrix for parent-child relationships
             rel_parents[i, iM] = 1
             rel_parents[i, iP] = 1
@@ -528,7 +556,7 @@ class Population:
                      'full_sibs': rel_fullsibs.astype(np.uint8),
                      'household': M_mate.astype(np.uint8)}
 
-        return (H, relations)
+        return (H, relations, Haplos)
 
     def flatten_generations(self, generations: int = 1) -> 'Population':
         '''
