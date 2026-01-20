@@ -90,7 +90,7 @@ class Population:
         self.traits = {}
         self.BPs = np.arange(self.M) # variant positions in base pairs (BPs)
         self.R = pop.generate_LD_blocks(self.M) # recombination rates
-        self.K = np.diag(np.ones(self.N)) # kinship matrix (initially identity)
+        self.K = np.diag(np.ones(self.N)) # kinship matrix (initially identity, not functional yet)
         self.keep_past_generations = keep_past_generations # how many past generations to keep in memory
         self.past = [self]
         for _ in range(keep_past_generations):

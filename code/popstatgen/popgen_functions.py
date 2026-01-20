@@ -176,7 +176,7 @@ def compute_LD_matrix(corr_matrix):
 
 def draw_binom_haplos(p: np.ndarray, N: int, P: int = 2) -> np.ndarray:
     '''
-    Generates 3-dimensional matrix of population haplotypes.
+    Generates 3-dimensional matrix of population haplotypes (allele dosages).
     Parameters:
         p (1D array): Array of length M containing allele frequencies from which haplotypes are drawn.
         N (int): Number of individuals in the population.
@@ -292,3 +292,165 @@ def initialize_relations(N: int, N1: int = None):
         'household': np.zeros((N, N), dtype=np.uint8)
     }
     return relations
+
+##################################
+#### IBD: Identity by Descent ####
+##################################
+
+def get_true_IBD1(chr_i: np.ndarray, chr_j: np.ndarray) -> np.ndarray:
+    '''
+    Computes true IBD1 segments between two haplotypes.
+    Parameters:
+        chr_i (1D array): Array of length M containing haplotype IDs for haplotype i.
+        chr_j (1D array): Array of length M containing haplotype IDs for haplotype j.
+    Returns:
+        IBD1 (1D boolean array): Array of length M where True indicates that the two haplotypes are IBD1 at that variant.
+    '''
+    IBD1 = (chr_i == chr_j)
+    # the -1 identifier is used to denote unrelated haplotypes
+    unrelated_mask = (chr_i == -1) | (chr_j == -1)
+    IBD1[unrelated_mask] = False
+    return IBD1
+
+def get_true_IBD_tensor(haplos_i:np.ndarray, haplos_j:np.ndarray) -> np.ndarray:
+    '''
+    Returns a 3D (M*P*P) tensor indicating IBD1 status for each pair of haplotypes between two individuals. Genotypes must be diploid (P=2).
+    Parameters:
+        haplos_i (2D array): M*2 array containing haplotype IDs for individual i.
+        haplos_j (2D array): M*2 array containing haplotype IDs for individual j.
+    Returns:
+        IBD_tensor (3D boolean array): M*P*P array where each element at (m, p_i, p_j) indicates whether haplotype p_i of individual i and haplotype p_j of individual j are IBD1 at variant m.
+    '''
+    # extracts relevant genotype dimensions (# of variants and ploidy)
+    (M, P) = haplos_i.shape # assumes same dimensions for both individuals
+    # checks if diploid
+    if P != 2:
+        raise ValueError("Genotypes must be diploid to compute IBD2.")
+    # makes empty list that is P*P*M
+    IBD_tensor = np.zeros((M,P,P), dtype=bool)
+    # computes IBD1 status for each pair of haplotypes
+    for (i_haplo, j_haplo) in [(0,0), (0,1), (1,0), (1,1)]:
+        IBD_hi_hj = get_true_IBD1(haplos_i[:, i_haplo], haplos_j[:, j_haplo])
+        IBD_tensor[:, i_haplo, j_haplo] = IBD_hi_hj
+    
+    return IBD_tensor
+
+def get_true_IBD_arr(haplos_i:np.ndarray, haplos_j:np.ndarray, return_tensor: bool = False) -> np.ndarray:
+    '''
+    Computes the IBD state (0,1,2) between two individuals based on their haplotype IDs. Genotypes must be diploid (P=2). Assumes that an individuals two haplotypes are different. So, e.g., if comparing (A,A) and (A,B), this is treated as IBD1, not IBD2.
+    Parameters:
+        haplos_i (2D array): M*2 array containing haplotype IDs for individual i.
+        haplos_j (2D array): M*2 array containing haplotype IDs for individual j.
+        return_tensor (bool): If True, also returns the full IBD tensor (M*P*P array) indicating IBD1 status for each haplotype pair.
+    Returns:
+        tuple ((IBD_arr, IBD_tensor)):
+        Where:
+        - IBD_arr (1D array): Array of length M where each element is 0, 1, or 2 indicating the IBD state between the two individuals at that variant.
+        - IBD_tensor (3D array, optional): If return_tensor is True, also returns the full IBD tensor (see get_true_IBD_tensor).
+    '''
+    
+    IBD_tensor = get_true_IBD_tensor(haplos_i, haplos_j)
+    (M, P, _) = IBD_tensor.shape
+    # sums IBD1 statuses to get IBD2 status
+    # by assuming that an individual's two haplotypes are different, it means IBD2 state can only occur when two distinct pairs of haplotype indices are IBD1 (e.g. (0,1) and (1,0), or (0,0) and (1,1), NOT (0,0) and (0,1))
+    IBD_arr = np.zeros(M, dtype=np.uint8)
+    # IBD1 status is first given to any variant where any haplotype pair is IBD1
+    IBD_arr[np.any(IBD_tensor, axis=(1,2))] = 1
+    # IBD2 status is then given to any variant where either (0,0) and (1,1) are both IBD1, or (0,1) and (1,0) are both IBD1
+    IBD2_mask = ( (IBD_tensor[:,0,0] & IBD_tensor[:,1,1]) |
+                  (IBD_tensor[:,0,1] & IBD_tensor[:,1,0]) )
+    IBD_arr[IBD2_mask] = 2
+
+    if return_tensor:
+        return (IBD_arr, IBD_tensor)
+    else:
+        return (IBD_arr)
+    
+def get_coeff_kinship(haplos_i:np.ndarray, haplos_j:np.ndarray, return_arr: bool = False) -> float:
+    '''
+    Computes the coefficient of kinship between two individuals based on their haplotype IDs.
+    Parameters:
+        haplos_i (2D array): M*2 array containing haplotype IDs for individual i.
+        haplos_j (2D array): M*2 array containing haplotype IDs for individual j.
+        return_arr (bool): If True, also returns an array with the coefficient of kinship between the two individuals at each variant.
+    Returns:
+        tuple ((coeff_kinship, coeff_kinship_arr)):
+        Where:
+        - coeff_kinship (float): Coefficient of kinship between the two individuals.
+        - coeff_kinship_arr (1D array, optional): If return_arr is True, also returns an array with the coefficient of kinship between the two individuals at each variant.
+    '''
+    IBD_tensor = get_true_IBD_tensor(haplos_i, haplos_j).astype(np.uint8)
+    P = IBD_tensor.shape[1]
+    # sums IBD1 statuses across all haplotype pairs
+    total_IBD1_arr = IBD_tensor.sum(axis=(1,2))
+    # computes kinship coefficient
+    coeff_kinship_arr = total_IBD1_arr / (P * P)
+    coeff_kinship = coeff_kinship_arr.mean()
+    if return_arr:
+        return (coeff_kinship, coeff_kinship_arr)
+    else:
+        return coeff_kinship
+
+def get_coeff_inbreeding(haplos_i:np.ndarray, return_arr: bool = False) -> float:
+    '''
+    Computes the coefficient of inbreeding for an individual based on their IBD tensor.
+    Parameters:
+        haplos_i (2D array): M*2 array containing haplotype IDs for individual i.
+        return_arr (bool): If True, also returns an array with the coefficient of inbreeding at each variant.
+    Returns:
+        tuple ((coeff_inbreeding, coeff_inbreeding_arr)):
+        Where:
+        - coeff_inbreeding (float): Coefficient of inbreeding for the individual.
+        - coeff_inbreeding_arr (1D array, optional): If return_arr is True, also returns an array with the coefficient of inbreeding (0 or 1) at each variant.
+    '''
+    IBD_tensor = get_true_IBD_tensor(haplos_i, haplos_i).astype(np.uint8)
+    # inbreeding coefficient is the IBD1 status between the two distinct haplotypes
+    coeff_inbreeding_arr = IBD_tensor[:,0,1] # guaranteed to be symmetric, so either off-diagonal works
+    coeff_inbreeding = coeff_inbreeding_arr.mean()
+    if return_arr:
+        return (coeff_inbreeding, coeff_inbreeding_arr)
+    else:
+        return coeff_inbreeding
+    
+def get_coeff_relatedness(haplos_i:np.ndarray, haplos_j:np.ndarray, return_arr: bool = False) -> float:
+    '''
+    Returns the coefficient of relatedness between two individuals based on their haplotype IDs. Simply twice the coefficient of kinship, see get_coeff_kinship().
+    Parameters:
+        haplos_i (2D array): M*2 array containing haplotype IDs for individual i.
+        haplos_j (2D array): M*2 array containing haplotype IDs for individual j.
+        return_arr (bool): If True, also returns an array with the coefficient of relatedness between the two individuals at each variant.
+    Returns:
+        tuple ((coeff_relatedness, coeff_relatedness_arr)):
+        Where:
+        - coeff_relatedness (float): Coefficient of relatedness between the two individuals.
+        - coeff_relatedness_arr (1D array, optional): If return_arr is True, also returns an array with the coefficient of relatedness between the two individuals at each variant.
+    '''
+    (coeff_kinship, coeff_kinship_arr) = get_coeff_kinship(haplos_i, haplos_j, return_arr=True)
+    coeff_relatedness = 2 * coeff_kinship
+    if return_arr:
+        coeff_relatedness_arr = 2 * coeff_kinship_arr
+        return (coeff_relatedness, coeff_relatedness_arr)
+    else:
+        return coeff_relatedness
+    
+
+def compute_K_IBD(Haplos: np.ndarray, standardize: bool = False) -> np.ndarray:
+    '''
+    Computes the kinship matrix based on true IBD between all pairs of individuals in the population.
+    Parameters:
+        Haplos (3D array): N*M*P array of haplotype IDs. First dimension is individuals, second dimension is variants, third dimension is haplotype number (related to ploidy).
+        standardize (bool): If True, standardizes the kinship matrix according to [Young et al. 2018 NatGen]. The mean value in the matrix becomes 0. Default is False.
+    Returns:
+        K_IBD (2D array): N*N kinship matrix based on true IBD between all pairs of individuals in the population. Element (i,j) is the coefficient of *relatedness* (twice that of kinship) between individuals i and j.
+    '''
+    N = Haplos.shape[0]
+    K_IBD = np.zeros((N, N))
+    for i in range(N):
+        for j in range(i, N):
+            coeff_relatedness = get_coeff_relatedness(Haplos[i, :, :], Haplos[j, :, :])
+            K_IBD[i, j] = coeff_relatedness
+            K_IBD[j, i] = coeff_relatedness
+    if standardize:
+        K0 = np.mean(K_IBD) # mean relatedness
+        K_IBD = (K_IBD - K0) / (1 - K0)
+    return K_IBD
