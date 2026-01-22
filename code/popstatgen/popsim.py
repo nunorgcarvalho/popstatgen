@@ -15,7 +15,8 @@ from . import statgen_functions as stat
 # other imports
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Tuple, Union
+from typing import Tuple, Union, Dict, Optional
+from dataclasses import dataclass
 from scipy import sparse
 from scipy.linalg import block_diag
 import copy
@@ -33,6 +34,7 @@ class Population:
     def __init__(self, N: int, M: int, P: int = 2,
                  p_init: Union[float, np.ndarray] = None,
                  keep_past_generations: int = 1,
+                 track_pedigree: bool = False,
                  seed: int = None):
         '''
         Initializes a population, simulating initial genotypes from specified allele frequencies.
@@ -42,6 +44,7 @@ class Population:
             P (int): Ploidy of genotpes. Default is 2 (diploid).
             p_init (float or array): Initial allele frequency of variants. If only a single value is provided, it is treated as the initial allele frequency for all variants. Alternatively, can be an array of length M for variant-specfic allele frequencies. If not provided, default is uniform distribution of allele frequencies between 0.05 and 0.95.
             keep_past_generations (int): Number of past generations to keep in the object. Default is 1, meaning the past generation is kept (on top of the current generation).
+            track_pedigree (bool): Whether to track pedigree information (stored in Population.ped). Must keep at least 1 past generation. Default is False.
             seed (int): Initial seed to use when simulating genotypes (and allele frequencies if necessary).
         '''
         # sets seed if specified
@@ -59,25 +62,26 @@ class Population:
         H = pop.draw_binom_haplos(p_init, N, P)
 
         # passes haplotype to base constructor for further initialization
-        self._initialize_H(H, keep_past_generations=keep_past_generations)
+        self._initialize_H(H, keep_past_generations=keep_past_generations, track_pedigree=track_pedigree)
     
     @classmethod
-    def from_H(cls, H: np.ndarray, keep_past_generations: int = 1):
+    def from_H(cls, H: np.ndarray, keep_past_generations: int = 1, track_pedigree: bool = False):
         '''
         Initializes a population from a given haplotype array.
         Parameters:
             H (3D array): N*M*P array of haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
             keep_past_generations (int): Number of past generations to keep in the object. Default is 1, meaning the past generation is kept (on top of the current generation).
+            track_pedigree (bool): Whether to track pedigree information (stored in Population.ped). Must keep at least 1 past generation. Default is False.
         Returns:
             Population: A new Population object initialized with the given haplotype array.
         '''
         # creates new instance of class
         pop = cls.__new__(cls)
         # initializes the object with the given haplotype array
-        pop._initialize_H(H, keep_past_generations=keep_past_generations)
+        pop._initialize_H(H, keep_past_generations=keep_past_generations, track_pedigree=track_pedigree)
         return pop
 
-    def _initialize_H(self, H: np.ndarray, keep_past_generations: int = 1):
+    def _initialize_H(self, H: np.ndarray, keep_past_generations: int = 1, track_pedigree: bool = False):
         '''
         Initializes a population from a given haplotype array. See the `from_H` class method for details.
         '''
@@ -91,6 +95,7 @@ class Population:
         self.BPs = np.arange(self.M) # variant positions in base pairs (BPs)
         self.R = pop.generate_LD_blocks(self.M) # recombination rates
         self.K = np.diag(np.ones(self.N)) # kinship matrix (initially identity, not functional yet)
+        self.track_pedigree = track_pedigree # whether to track pedigree information
         self.keep_past_generations = keep_past_generations # how many past generations to keep in memory
         self.past = [self]
         for _ in range(keep_past_generations):
@@ -100,6 +105,7 @@ class Population:
         # further attributes
         self._update_obj(H=H, Haplos=Haplos, update_past=False)
         self.relations = pop.initialize_relations(self.N)
+        self.ped = Pedigree(self.N)
 
         # defines metrics
         self.metric = {}
@@ -127,7 +133,8 @@ class Population:
     ###################################
 
     def _update_obj(self, H: np.ndarray = None, update_past: bool = True,
-                    relations: dict = None, Haplos: np.ndarray = None):
+                    relations: dict = None, Haplos: np.ndarray = None,
+                    update_pedigree: bool = False):
         '''
         Update the population object's attributes.
         Parameters:
@@ -135,6 +142,7 @@ class Population:
             update_past (bool): Whether to update the memory of past generations. Default is True.
             relations (dict): Dictionary of relationship matrices to update. If None, does not update relationships. Default is None.
             Haplos (3D array): Haplotype identifier array. If None, does not update haplotype identifiers. Default is None.
+            update_pedigree (bool): Whether to update pedigree information. Must also update past generations. Default is False.
         '''
         # keep this before updating anything else
         if update_past:
@@ -149,6 +157,9 @@ class Population:
             self.Haplos = Haplos
         if relations is not None:
             self._update_relations(relations)
+        if update_pedigree and update_past:
+            # this must happen after updating past generations and their relations
+            self._update_pedigree()
 
     def _update_past(self):
         '''
@@ -178,6 +189,17 @@ class Population:
                 self.relations['spouses'] = np.zeros((self.N, self.N), dtype=np.uint8) # resets spouses relationship matrix for current gen
             else:
                 self.relations[key] = relations[key] # sets other relationship matrices for current generation
+
+    def _update_pedigree(self):
+        '''
+        Updates the pedigree information in the population object.
+        '''
+        if self.keep_past_generations < 1:
+            raise Exception('Must keep at least 1 past generation to track pedigree.')
+        # makes new Pedigree object from scratch, and then fills it in with the new relationships
+        self.ped = Pedigree(self.N)
+        self.ped.construct_rel4(self.relations['parents'], self.past[1].ped)
+        self.ped.fill_rel2_from_rel4()
 
     def store_neighbor_matrix(self, LDwindow: float = None) -> sparse.coo_matrix:
         '''
@@ -398,7 +420,7 @@ class Population:
                 Haplos = np.full_like(H, -1, dtype=int) # unrelated haplotypes
                 relations = None
             # updates objects and past
-            self._update_obj(H=H, update_past=True, relations=relations, Haplos=Haplos)
+            self._update_obj(H=H, update_past=True, relations=relations, Haplos=Haplos, update_pedigree=self.track_pedigree)
             # records metrics
             self._update_temp_metrics(t, G=self.G)
             if trait_updates:
@@ -531,7 +553,7 @@ class Population:
             H[i,:,:] = haplos
 
             # does same inheritance for haplotype IDs (instead of allele dosages)
-            # (yes, I know it's confusing that I am using haplo to refer to both)
+            # (yes, I know it's confusing that I am using H/haplo to refer to both)
             HaploM = self.Haplos[iM, np.arange(self.M), haplo_ks[i, :, 0]]
             HaploP = self.Haplos[iP, np.arange(self.M), haplo_ks[i, :, 1]]
             Haplos_i = np.stack((HaploM, HaploP), axis = 1)
@@ -1149,3 +1171,186 @@ class SuperPopulation:
                 continue
             print(f'Population {i}:')
             print(getattr(pop, attribute, 'Attribute not found.'))
+
+
+# the following classes are related to storing relatedness/pedigree information
+
+# data types
+PedPath = Tuple[int, ...] # stores chain of meiosis up/down, see [Williams et al. 2025 Genetics]
+PedKey2 = Tuple[int,int] # stores pair of individual indices (i,j)
+PedParPos = Tuple[int,int] # stores pair of parental indices (k,l: 0/1)
+PedKey4 = Tuple[int,int,int,int] # stores pair of individual indices + their parents (i,j,k,l)
+
+@dataclass
+class PedPairwise:
+    path: PedPath
+    parent_pair: Tuple[PedParPos, ...]  # list of parent pair(s) leading to this relationship
+
+class Pedigree:
+    def __init__(self, N: int):
+        # pairwise and pairwise+parent dictionaries
+        self.rel2: Dict[PedKey2, PedPairwise] = {}
+        self.rel4: Dict[PedKey4, PedPath] = {}
+        self.N = N # population size
+
+        # maps PedPath to a canonical PedPath for storage efficiency
+        self._paths: Dict[PedPath, PedPath] = {}
+
+        # fills in rel2 with self-relationships
+        self.fill_rel2_self()
+
+    def intern_path(self, path: PedPath) -> PedPath:
+        '''
+        Return the canonical tuple object for this PedPath.
+        Small wrapper around dict.setdefault for clarity.
+        '''
+        return self._paths.setdefault(path, path)
+
+    @staticmethod
+    def extend_parent_path_to_offspring(parent_pair_path: PedPath) -> PedPath:
+        '''
+        Given a path between two parents, extends it to the offspring pair by adding one meiosis up and one meiosis down.
+        '''
+        offspring_pair_path = (1,) + parent_pair_path + (-1,)
+        return offspring_pair_path
+    
+    def compress_rel4_to_rel2(self, i: int, j: int) -> Optional[PedPairwise]:
+        '''
+        Given two individuals' parents, returns the relationship relative to the parent pair with the shortest path. Specifically, it is the path of i to j.
+        '''
+        shortest_path = None # PedPath
+        shortest_path_pairs = []
+        for k in (0,1): # individual i's parental indices (mom/dad : 0/1)
+            for l in (0,1): # individual j's parental indices (mom/dad : 0/1)
+                # extracts path for specified parent pair
+                key4 = (i,j,k,l)
+                parent_pair_path = self.rel4.get(key4)
+                # skips if parent pair is unrelated
+                if parent_pair_path is None:
+                    continue
+                
+                # if the parent path is the shortest yet, it stores it solely
+                if shortest_path is None or len(parent_pair_path) < len(shortest_path):
+                    shortest_path = parent_pair_path
+                    shortest_path_pairs = [(k,l)]
+                # if the parent path ties for shortest, we need to be more careful
+                elif len(parent_pair_path) == len(shortest_path):
+                    # if the paths are identical, we can just add the parent pair indices
+                    if parent_pair_path == shortest_path:
+                        shortest_path_pairs.append((k,l))
+                    # if they are different, we (arbitrarily) choose to keep the path with more negative steps (more meioses down)
+                    else:
+                        if parent_pair_path.count(-1) > shortest_path.count(-1):
+                            shortest_path = parent_pair_path
+                            shortest_path_pairs = [(k,l)]
+
+        # if all parent pairs are unrelated, then so is the offspring pair
+        if shortest_path is None:
+            return None
+        else:
+            # extends the shortest parent path to the offspring pair path
+            i2j_path = self.extend_parent_path_to_offspring(shortest_path)
+            i2j_path = self.intern_path(i2j_path) # converts to canonical path
+            return PedPairwise(path=i2j_path, parent_pair=tuple(shortest_path_pairs))
+    def reverse_path(self, path: PedPath) -> PedPath:
+        '''
+        Reverse a PedPath (flip order and sign) and intern it.
+        Example: (1,-1,-1) -> (1,1,-1)
+        '''
+        reversed_path = tuple(-step for step in path[::-1])
+        return self.intern_path(reversed_path)
+
+    def reverse_pairwise(self, pw_ij: PedPairwise) -> PedPairwise:
+        '''
+        Reverse a PedPairwise: flip path and flip parent positions (k,l) -> (l,k).
+        '''
+        pw_ji_path = self.reverse_path(pw_ij.path)
+        pw_ji_pairs = tuple((l, k) for (k, l) in pw_ij.parent_pair)
+        pw_ji = PedPairwise(path=pw_ji_path, parent_pair=pw_ji_pairs)
+        return pw_ji
+
+    def fill_rel2_self(self):
+        '''
+        Fills in the rel2 dictionary with self-relationships only.
+        '''
+        # handles self-relationships
+        self_path = self.intern_path( () ) # empty path for self
+        self_obj = PedPairwise(path = self_path, parent_pair = ( (0,0), (0,1), (1,0), (1,1) ) ) # self relationship has no path, all parent pairs
+        for i in range(self.N):
+            self.rel2[(i,i)] = self_obj
+
+    def fill_rel2_from_rel4(self, force: bool = False):
+        '''
+        Fills in the rel2 dictionary from the rel4 dictionary by compressing each offspring pair's relationship to the shortest parent pair relationship.
+        Parameters:
+            force (bool): Whether to overwrite existing entries in the rel2 dictionary. Default is False. Checks only (i,j), but overwrites both (i,j) and (j,i) if not present.
+        '''
+        # iterates over all pairs of individuals (i > j)
+        for i in range(self.N):
+            for j in range(i+1, self.N):
+                # checks if relationship already exists
+                if not force and (i,j) in self.rel2:
+                    continue
+                # gets the compressed relationship of i to j
+                ped_ij = self.compress_rel4_to_rel2(i, j)
+                # if no relationship exists (unrelated), skips
+                if ped_ij is  None:
+                    continue
+                # constructs the reverse relationship of j to i
+                ped_ji = self.reverse_pairwise(ped_ij)
+                
+                # stores both relationships
+                self.rel2[(i,j)] = ped_ij
+                self.rel2[(j,i)] = ped_ji
+        
+        # handles self-relationships
+        self.fill_rel2_self()
+
+    def construct_rel4(self, rel_parents: np.ndarray, par_ped: 'Pedigree'):
+        '''
+        Constructs the rel4 dictionary for the current generation based on the Population.relations['parents'] matrix from the Population object and the Pedigree of the parents.
+        '''
+        N_offspring = rel_parents.shape[0] # this should be the same as self.N!
+        if N_offspring != self.N:
+            raise ValueError("Number of offspring in rel_parents does not match self.N.")
+        
+        # stores unique offspring parent pairs
+        parent_pairs = {}
+        for i in range(N_offspring):
+            i_par_indices = tuple( np.flatnonzero(rel_parents[i, :]) ) # should always be a tuple of length 2
+            if len(i_par_indices) != 2:
+                raise ValueError("Each offspring must have exactly two parents.")
+            if i_par_indices not in parent_pairs:
+                parent_pairs[i_par_indices] = [i]
+            else:
+                parent_pairs[i_par_indices].append(i)
+
+        # nested loop galore, i know
+        # nested loop through each parent pair combination
+        parent_pairs_items = list(parent_pairs.items())
+        for i_pars_idx in range(len(parent_pairs_items)):
+            i_pars = parent_pairs_items[i_pars_idx][0]
+            for j_pars_idx in range(i_pars_idx, len(parent_pairs_items)):
+                j_pars = parent_pairs_items[j_pars_idx][0]
+                # gets each parent pairs' offspring
+                i_offspring = parent_pairs[i_pars]
+                j_offspring = parent_pairs[j_pars]
+                # fills in rel4 for each offspring pair
+                # loops through each cross-parent pair
+                for k in (0,1):
+                    for l in (0,1):
+                        # gets path objectbetween the two cross-parents
+                        ik_jl_path_obj = par_ped.rel2.get( (i_pars[k], j_pars[l]) )
+                        # doesn't fill in anything if parents are unrelated
+                        if ik_jl_path_obj is None:
+                            continue
+                        # extracts (canonical) path
+                        ik_jl_path = self.intern_path(ik_jl_path_obj.path)
+                        # stores parent path in rel4 for each offspring pair
+                        for i in i_offspring:
+                            for j in j_offspring:
+                                if i == j:
+                                    continue # skips self-relationships when the two pairs are actually just the same (e.g. siblings). Still computes pairwise relationships between siblings
+                                # stores path for offspring pair and its reverse
+                                self.rel4[(i,j,k,l)] = ik_jl_path
+                                self.rel4[(j,i,l,k)] = self.reverse_path(ik_jl_path)

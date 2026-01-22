@@ -289,7 +289,8 @@ def initialize_relations(N: int, N1: int = None):
         'parents': np.zeros((N, N1), dtype=np.uint8),
         'full_sibs': np.zeros((N, N), dtype=np.uint8),
         'spouses': np.zeros((N, N), dtype=np.uint8),
-        'household': np.zeros((N, N), dtype=np.uint8)
+        'household': np.zeros((N, N), dtype=np.uint8),
+        'ped': {}
     }
     return relations
 
