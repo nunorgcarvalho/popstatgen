@@ -218,7 +218,7 @@ class Population:
         # makes new Pedigree object from scratch, and adds parent infices and Pedigree pointer
         self.ped = Pedigree(self.N, par_idx = self.relations['par_idx'], par_Ped = self.past[1].ped)
         # fills out the relationship matrix
-        self.ped.construct_rel2()
+        self.ped.construct_paths()
 
     def store_neighbor_matrix(self, LDwindow: float = None) -> sparse.coo_matrix:
         '''
@@ -665,11 +665,11 @@ class Population:
 
         # starts by filling in diagonal blocks
         for gen in range(generations + 1):
-            # copies over each generation's Pedigree rel2
-            for key, value in pops[gen].ped.rel2.items():
+            # copies over each generation's Pedigree paths
+            for key, value in pops[gen].ped.paths.items():
                 # need to shift indices based on generation
                 key = (key[0] + Ns_cumsum[gen], key[1] + Ns_cumsum[gen])
-                new_pop.ped.rel2[key] = value
+                new_pop.ped.paths[key] = value
         # fills in off-diagonal blocks, by going through each adjacent diagonal at a time
         for gap in range(1, generations+1):
             for start_gen in range(generations+1 - gap):
@@ -682,7 +682,7 @@ class Population:
                     for j in range(Ns[end_gen]): # individual in older generation
                         keys = ( (i_ancestor, j) for i_ancestor in i_gen_ancs ) # prepares keys for get_closest_path
                         # determines the closest path between i and j through i's ancestors
-                        closest_anc_path, closest_anc_path_keys = new_pop.ped.get_closest_path(pops[end_gen].ped.rel2, keys)
+                        closest_anc_path, closest_anc_path_keys = new_pop.ped.get_closest_path(pops[end_gen].ped.paths, keys)
                         if closest_anc_path is None:
                             continue # no relationship, don't store anything
                         else:
@@ -702,13 +702,13 @@ class Population:
                         # gets reverse path
                         path_ji = new_pop.ped.reverse_path(path_ij)
 
-                        # gets keys of each for new_pop's rel2
+                        # gets keys of each for new_pop's paths
                         key_ij = (i + Ns_cumsum[start_gen], j + Ns_cumsum[end_gen])
                         key_ji = (j + Ns_cumsum[end_gen], i + Ns_cumsum[start_gen])
 
-                        # adds to rel2
-                        new_pop.ped.rel2[key_ij] = path_ij
-                        new_pop.ped.rel2[key_ji] = path_ji
+                        # adds to paths
+                        new_pop.ped.paths[key_ij] = path_ij
+                        new_pop.ped.paths[key_ji] = path_ji
             
         # actually sets relations
         new_pop.relations['full_sibs'] = full_sibs
@@ -1319,19 +1319,9 @@ class SuperPopulation:
             print(f'Population {i}:')
             print(getattr(pop, attribute, 'Attribute not found.'))
 
-
-# the following classes are related to storing relatedness/pedigree information
-
 # data types
-PedPath = Tuple[int, ...] # stores chain of meiosis up/down, modified from [Williams et al. 2025 Genetics]
+PedPath = Tuple[int, ...] # stores chain of meioses up/down, modified from [Williams et al. 2025 Genetics]
 PedKey2 = Tuple[int,int] # stores pair of individual indices (i,j)
-PedParPos = Tuple[int,int] # stores pair of parental indices (k,l: 0/1)
-PedKey4 = Tuple[int,int,int,int] # stores pair of individual indices + their parents (i,j,k,l)
-
-@dataclass
-class PedPairwise:
-    path: PedPath
-    parent_pair: Tuple[PedParPos, ...]  # list of parent pair(s) leading to this relationship
 
 class Pedigree:
     def __init__(self, N: int, par_idx: np.ndarray = None, par_Ped: 'Pedigree' = None):
@@ -1342,17 +1332,18 @@ class Pedigree:
             par_idx (N*2 array): stores the indices of individual i's two parents. These parental indices should correspond to the parent generation's indices. Default is None (e.g. founding generation).
             par_Ped (Pedigree): pointer to the parent generation's Pedigree object. Default is None (e.g. founding generation).
         '''
-        # pairwise and pairwise+parent dictionaries
-        self.rel2: Dict[PedKey2, PedPath] = {}
+        # initializes attributes
         self.N = N # population size
-        self.par_idx = par_idx if par_idx is not None else None
-        self.par_Ped = par_Ped if par_Ped is not None else None
+        self.paths: Dict[PedKey2, PedPath] = {} # pairwise relationship path dictionary
+        self.degs: Dict[PedKey2, int] = {} # pairwise degree of relatedness dictionary
+        self.par_idx = par_idx if par_idx is not None else None # parental indices
+        self.par_Ped = par_Ped if par_Ped is not None else None # parental Pedigree object
 
         # maps PedPath to a canonical PedPath for storage efficiency
         self._paths: Dict[PedPath, PedPath] = {}
 
-        # fills in rel2 with self-relationships (denoted by () )
-        self.fill_rel2_self()
+        # fills in paths with self-relationships (denoted by () )
+        self.fill_paths_self()
 
     def intern_path(self, path: PedPath) -> PedPath:
         '''
@@ -1379,11 +1370,11 @@ class Pedigree:
         return self.intern_path(extended_path)
     
     @staticmethod
-    def get_closest_path(rel2: Dict, keys: Tuple) -> Tuple[Optional[PedPath], List, Optional[List]]:
+    def get_closest_path(paths: Dict, keys: Tuple) -> Tuple[Optional[PedPath], List]:
         '''
         Given a dictionary of relationships and a list of keys, returns the closest path among the keys.
         Parameters:
-            rel2 (Dict): Dictionary of relationships (rel2 attribute in a Pedigree object).
+            paths (Dict): Dictionary of relationships (paths attribute in a Pedigree object).
             keys (Tuple): Tuple of keys to check.
         Returns:
             tuple ((closest_path, closest_path_keys)):
@@ -1394,7 +1385,7 @@ class Pedigree:
         closest_path = None # PedPath object
         closest_path_keys = []
         for key in keys:
-            path = rel2.get(key)
+            path = paths.get(key)
             # skips if pair is unrelated
             if path is None:
                 continue
@@ -1425,7 +1416,7 @@ class Pedigree:
     
     def reverse_path(self, path: PedPath) -> PedPath:
         '''
-        Reverse a PedPath (flip order and sign) and intern it. Example: (1,-3,-1) -> (1,3,-1). Also interns the path before returning.
+        Reverse a PedPath (flip order and sign) and intern it. Example: (2,-3,-1) -> (1,3,-2). Also interns the path before returning.
         Parameters:
             path (PedPath): The path to reverse.
         Returns:
@@ -1434,18 +1425,21 @@ class Pedigree:
         reversed_path = tuple(-step for step in path[::-1])
         return self.intern_path(reversed_path)
 
-    def fill_rel2_self(self):
+    def fill_paths_self(self):
         '''
-        Fills in the rel2 dictionary with self-relationships only.
+        Fills in the paths dictionary with self-relationships only.
         '''
         self_path = self.intern_path( () ) # empty path for self
         for i in range(self.N):
-            self.rel2[(i,i)] = self_path
+            self.paths[(i,i)] = self_path
 
-    def construct_rel2(self):
+    def construct_paths(self):
         '''
         Constructs a dictionary with the relationship paths between every related individual in the current population. Pedigree object must have par_idx and par_Ped attributes. See __init__(). For individual i and j, the shortest relationship path between the 4 pairs of parents of i and j is used, and then extended by one meiosis up and down to get the relationship path between i and j. This can erase inbreeding information in the current generation. Only entries i>j are explicitly computed, since the reverse relationships are automatically filled in.
         '''
+        # checks to ensure par_idx and par_Ped are in the object
+        if self.par_idx is None or self.par_Ped is None:
+            raise ValueError("par_idx and par_Ped must be attributed of the object to construct paths.")
         # iterates over all pairs of individuals (i > j)
         for i in range(self.N):
             for j in range(i+1, self.N):
@@ -1453,7 +1447,7 @@ class Pedigree:
                 j_pars = np.array(self.par_idx[j, :])  # (mom ID, dad ID)
                 # gets shortest path and the keys that produced it
                 keys = [ (i_pars[k], j_pars[l]) for k in (0,1) for l in (0,1) ]
-                pargen_path, pargen_keys = self.get_closest_path(self.par_Ped.rel2, keys)
+                pargen_path, pargen_keys = self.get_closest_path(self.par_Ped.paths, keys)
 
                 # if all parent pairs are unrelated, then so is the offspring pair
                 if pargen_path is None:
@@ -1468,7 +1462,7 @@ class Pedigree:
                 if 0 in j_par_closest and 1 in j_par_closest:
                     down_sex = -3 # if both parents of j have a closest path, use -3 encoding
                 else:
-                    down_sex = -(j_par_closest[0] + 1) # otherwise, use the parent that produced the closest path (incremented by 1 and then flipped signfor encoding)
+                    down_sex = -(j_par_closest[0] + 1) # otherwise, use the parent that produced the closest path (incremented by 1 and then flipped sign for encoding)
 
                 # extends closest parental path by adding sex-encoded up/down meioses
                 path_ij = self.extend_path(pargen_path, ups=(up_sex,), downs=(down_sex,) )
@@ -1478,8 +1472,53 @@ class Pedigree:
                 path_ji = self.reverse_path(path_ij) # (path is interned inside function)
 
                 # stores both relationships
-                self.rel2[(i,j)] = path_ij
-                self.rel2[(j,i)] = path_ji
+                self.paths[(i,j)] = path_ij
+                self.paths[(j,i)] = path_ji
 
         # handles self-relationships
-        self.fill_rel2_self()
+        self.fill_paths_self()
+
+    def determine_degs(self):
+        '''
+        Fills in the degs dictionary with the degree of relatedness between every related individual in the current population. Uses the paths attribute to determine degree of relatedness. Only entries i>=j are explicitly computed, since the reverse relationships are automatically filled in.
+        
+        NOTE: For certain inbred pedigrees, the paths cannot unambiguously distinguish them, and thus the degree of relatedness may be incorrect. An example is double-first cousins vs two individuals whose 4 parents are all full-siblings with each other. Both have a path of [+3 +3 -3 -3], but the former is degree 2, and the latter is degree 1. This method will classify both as degree 2. Such cases are rare in practice, however. An attribute `errorprone_paths` is added to the Pedigree object that stores all paths that may be error-prone due to this issue. However, even this  will not catch all error-prone paths; e.g. the full-sibling parents example will not be caught, as it's indistinguishable from double-first cousins, who are truly degree 2. 
+        '''
+        errorprone_paths = {}
+        for (i,j), path in self.paths.items():
+            if i > j:
+                continue # only computes for i>=j
+            # degree is defined by counting up each entry in the path according to:
+            # +1, +2, -2, -1 -> +1 degree
+            # +3, -3 -> +0.5 degrees
+            # because of symmetry, the degree of non-inbred paths should always end up as an integer
+            # when this doesn't happen
+            count_3 = path.count(3)
+            count_neg3 = path.count(-3)
+            if count_3 != count_neg3:
+                # note that even this check will NOT catch all error-prone paths, but it will catch some of them (e.g. the full-sibling parents example will not be caught, as it's indistinguishable from double-first cousins, who are truly degree 2)
+                errorprone_paths[(i,j)] = path
+            deg_ij = len(path) - 0.5*(count_3 + count_neg3)
+            deg_ij = int(deg_ij) # converts to integer (floors it) 
+            self.degs[(i,j)] = deg_ij
+            self.degs[(j,i)] = deg_ij # symmetric
+        
+        self.errorprone_paths = errorprone_paths # stores paths that may be error-prone due to symmetry issues
+
+        print(f'WARNING: Out of {len(self.paths)} total paths, at least {len(self.errorprone_paths)} paths may have innaccurate degrees of relatedness due to inbred pedigree structure. These are stored in the errorprone_paths attribute of the Pedigree object.')
+
+    def summarize_degrees(self) -> Dict[int, int]:
+        '''
+        Summarizes the degrees of relatedness in pedigree by counting the number of pairs for each degree. Note that pairs are counted twice (i,j) and (j,i).
+        Returns:
+            deg_summary (Dict): Dictionary summarizing the number of pairs for each degree of relatedness.
+        '''
+        deg_summary: Dict[int, int] = {}
+        for deg in self.degs.values():
+            if deg in deg_summary:
+                deg_summary[deg] += 1
+            else:
+                deg_summary[deg] = 1
+        # sorts keys
+        deg_summary = dict(sorted(deg_summary.items()))
+        return deg_summary
