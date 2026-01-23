@@ -217,9 +217,8 @@ class Population:
             raise Exception('Must keep at least 1 past generation to track pedigree.')
         # makes new Pedigree object from scratch, and adds parent infices and Pedigree pointer
         self.ped = Pedigree(self.N, par_idx = self.relations['par_idx'], par_Ped = self.past[1].ped)
-        #self.ped.construct_rel4(self.relations['par_idx'], self.past[1].ped)
+        # fills out the relationship matrix
         self.ped.construct_rel2()
-        #self.ped.fill_rel2_from_rel4()
 
     def store_neighbor_matrix(self, LDwindow: float = None) -> sparse.coo_matrix:
         '''
@@ -663,49 +662,53 @@ class Population:
             parent_child[j_start:j_end, i_start:i_end] = gen_parents.T
 
         # creates accurate Pedigree object for combined population
-        # only rel2 can be computed for this initial flattened generation
-        Ns_cumsum = np.cumsum([0] + Ns)
-        for gen in range(generations+1):
-            # fills in main diagonal blocks
+
+        # starts by filling in diagonal blocks
+        for gen in range(generations + 1):
+            # copies over each generation's Pedigree rel2
             for key, value in pops[gen].ped.rel2.items():
                 # need to shift indices based on generation
-                if gen > 0:
-                    key = (key[0] + Ns_cumsum[gen], key[1] + Ns_cumsum[gen])
+                key = (key[0] + Ns_cumsum[gen], key[1] + Ns_cumsum[gen])
                 new_pop.ped.rel2[key] = value
-            # fills in off diagonal blocks
-            if gen == generations:
-                continue # no more generations to link to
-            # loops through pairs of individuals in current generation and individuals in their parent generation
-            for i in range(Ns[gen]):
-                for j in range(Ns[gen + 1]):
-                    # gets indices (w.r.t. parent generation) of i's parents
-                    i_pars = np.flatnonzero( pops[gen].relations['parents'][i,:] )
-                    par_keys = ( (i_par, j) for i_par in i_pars ) # prepares keys for get_shortest_path
-                    # determines the shortest path between i and j through i's parents
-                    shortest_par_path, shortest_path_keys, shortest_path_par_pairs = new_pop.ped.get_shortest_path(pops[gen+1].ped.rel2, par_keys)
-                    if shortest_par_path is None:
-                        continue # no relationship, don't store anything
-                    else:
-                        shortest_par_path = self.ped.intern_path(shortest_par_path)
+        # fills in off-diagonal blocks, by going through each adjacent diagonal at a time
+        for gap in range(1, generations+1):
+            for start_gen in range(generations+1 - gap):
+                end_gen = start_gen + gap
+                # gets nested list of ancestors at each generation for each individual in the younger generation
+                ancestors = self.get_ancestors(base_gen=start_gen, end_gen=end_gen)
+                # loops through pairs of individuals in start_gen and end_gen
+                for i in range(Ns[start_gen]): # individual in younger generation
+                    i_gen_ancs = ancestors[i][gap - 1] # ancestors of individual i at generation end_gen (generation of j)
+                    for j in range(Ns[end_gen]): # individual in older generation
+                        keys = ( (i_ancestor, j) for i_ancestor in i_gen_ancs ) # prepares keys for get_closest_path
+                        # determines the closest path between i and j through i's ancestors
+                        closest_anc_path, closest_anc_path_keys = new_pop.ped.get_closest_path(pops[end_gen].ped.rel2, keys)
+                        if closest_anc_path is None:
+                            continue # no relationship, don't store anything
+                        else:
+                            closest_anc_path = new_pop.ped.intern_path(closest_anc_path)
+                        
+                        # first [0] extracts (arbitrarily) the first chain with the closest path
+                        # the second [0] extracts the ID of i's ancestor for this chain
+                        i_gen_closest = closest_anc_path_keys[0][0]
+                        # converts i's ancestor ID (in end_gen indices) to index from i_gen_ancs
+                        i_gen_closest_k = np.where(np.isin(i_gen_ancs, i_gen_closest))[0][0]
+                        # converts this index to an array of bits, which informs whether a maternal or paternal meiosis happens as one goes up i's lineage to get to their closest ancestor to j
+                        i_gen_closest_bits = np.array( self.to_bits(i_gen_closest_k, gap) )
+                        up_sexes = tuple( i_gen_closest_bits + 1 ) # converts to sex-informed path steps
 
-                    # extract the parent index (k: 0/1) of i that is closest to j
-                    # in the case that individual j is equally related to both of i's parents, just takes the first one (arbitrary) (denoted by the first [0] below)
-                    k = np.where(i_pars == shortest_path_keys[0][0]) # the second [0] denotes we are taking the index of i's parent that is closest to j
+                        # takes path of i's ancestor to j and extends it by the specified meioses
+                        path_ij = new_pop.ped.extend_path(closest_anc_path, ups = up_sexes) # already interned
+                        # gets reverse path
+                        path_ji = new_pop.ped.reverse_path(path_ij)
 
-                    # extracts the parent index 
-                    
-                    
-                    # extends path to include extra up meiosis (i-->j)
-                    path_ij = new_pop.ped.extend_path(shortest_par_path, ups=1, downs=0)
-                    path_ij_par_pair = shortest_path_par_pairs
-                    # prepares keys for new flattened population
-                    key_ij = (i + Ns_cumsum[gen], j + Ns_cumsum[gen + 1])
-                    new_pop.ped.rel2[key_ij] = path_ij
+                        # gets keys of each for new_pop's rel2
+                        key_ij = (i + Ns_cumsum[start_gen], j + Ns_cumsum[end_gen])
+                        key_ji = (j + Ns_cumsum[end_gen], i + Ns_cumsum[start_gen])
 
-                    # fills in reverse direction as well
-                    path_ji = new_pop.ped.reverse_path(path_ij)
-                    key_ji = (j + Ns_cumsum[gen + 1], i + Ns_cumsum[gen])
-                    new_pop.ped.rel2[key_ji] = path_ji
+                        # adds to rel2
+                        new_pop.ped.rel2[key_ij] = path_ij
+                        new_pop.ped.rel2[key_ji] = path_ji
             
         # actually sets relations
         new_pop.relations['full_sibs'] = full_sibs
@@ -713,6 +716,42 @@ class Population:
         new_pop.relations['parent_child'] = parent_child
 
         return new_pop
+    
+    @staticmethod
+    def to_bits(n: int, bits: int):
+        '''
+        Converts integer n to list of bits of length `bits`.
+        Parameters:
+            n (int): Integer to convert to bits.
+            bits (int): Number of bits to convert to.
+        Returns:
+            bit_list (list): List of bits representing integer n.
+        '''
+        return [int(b) for b in format(n, f'0{bits}b')]
+
+    def get_ancestors(self, base_gen: int = 0, end_gen: int = 1) -> list:
+        '''
+        Gets nested list of ancestors at each generation for each individual in the specified base generation.
+        Parameters:
+            base_gen (int): Generation index of individuals for whom to get ancestors. Default is 0 (current generation).
+            end_gen (int): Generation index up to which ancestors are retrieved (inclusive). Must be greater than base_gen. Default is 1 (previous generation).
+        Returns:
+            ancestors (list): A list of length N, where each element is a list of length `end_gen - base_gen`, where each element is a list of ancestor indices at that generation.
+        '''
+        ancestors = []
+        for i in range(self.past[base_gen].N):
+            i_ancestors = [] # nested list of ancestors for individual i at each generation
+            current_inds = [i] # indices of i's ancestors at current generation (initializes at gen=0)
+            for gen in range(base_gen, end_gen): 
+                next_inds = []
+                for ind in current_inds:
+                    # gets indices of parents for individual ind
+                    par_inds = self.past[gen].relations['par_idx'][ind, :]
+                    next_inds.extend(par_inds.tolist())
+                i_ancestors.append(next_inds)
+                current_inds = next_inds
+            ancestors.append(i_ancestors)
+        return ancestors
 
     #######################
     #### Visualization ####
@@ -1383,30 +1422,6 @@ class Pedigree:
                 closest_path_keys = [key]
             
         return closest_path, closest_path_keys
-
-    # def compress_rel4_to_rel2(self, i: int, j: int) -> Optional[PedPairwise]:
-    #     '''
-    #     Given two individuals' parents, returns the relationship relative to the parent pair with the shortest path. Specifically, it is the path of i to j.
-    #     Parameters:
-    #         i (int): Index of individual i.
-    #         j (int): Index of individual j.
-    #     Returns:
-    #         Optional[PedPairwise]: The relationship between individuals i and j, or None if they are unrelated
-    #     '''
-    #     # there are four possible parent pairs (k,l) for the offspring pair (i,j)
-    #     parent_pair_keys = [(i,j,k,l) for k in (0,1) for l in (0,1)]
-    #     # extracts shortest path among parent pairs from rel4 dictionary
-    #     shortest_path, shortest_path_keys, _ = self.get_shortest_path(self.rel4, parent_pair_keys)
-        
-    #     # if all parent pairs are unrelated, then so is the offspring pair
-    #     if shortest_path is None:
-    #         return None
-    #     else:
-    #         # we only care about the parent pairs (k,l) for the offspring pair (i,j)
-    #         shortest_path_pairs = [ (k,l) for (_,_,k,l) in shortest_path_keys ]
-    #         # extends the shortest parent path to the offspring pair path
-    #         i2j_path = self.extend_path(shortest_path, ups=1, downs=1)
-    #         return PedPairwise(path=i2j_path, parent_pair=tuple(shortest_path_pairs))
     
     def reverse_path(self, path: PedPath) -> PedPath:
         '''
@@ -1418,19 +1433,6 @@ class Pedigree:
         '''
         reversed_path = tuple(-step for step in path[::-1])
         return self.intern_path(reversed_path)
-
-    # def reverse_pairwise(self, pw_ij: PedPairwise) -> PedPairwise:
-    #     '''
-    #     Reverse a PedPairwise: flip path and flip parent positions (k,l) -> (l,k).
-    #     Parameters:
-    #         pw_ij (PedPairwise): The PedPairwise to reverse.
-    #     Returns:
-    #         PedPairwise: The reversed PedPairwise.
-    #     '''
-    #     pw_ji_path = self.reverse_path(pw_ij.path)
-    #     pw_ji_pairs = tuple((l, k) for (k, l) in pw_ij.parent_pair)
-    #     pw_ji = PedPairwise(path=pw_ji_path, parent_pair=pw_ji_pairs)
-    #     return pw_ji
 
     def fill_rel2_self(self):
         '''
@@ -1451,10 +1453,10 @@ class Pedigree:
                 j_pars = np.array(self.par_idx[j, :])  # (mom ID, dad ID)
                 # gets shortest path and the keys that produced it
                 keys = [ (i_pars[k], j_pars[l]) for k in (0,1) for l in (0,1) ]
-                path_pars, pargen_keys = self.get_closest_path(self.par_Ped.rel2, keys)
+                pargen_path, pargen_keys = self.get_closest_path(self.par_Ped.rel2, keys)
 
                 # if all parent pairs are unrelated, then so is the offspring pair
-                if path_pars is None:
+                if pargen_path is None:
                     continue
                 # determines which parent(s) (0 or 1) for i and j produced the closest path
                 i_par_closest = [(np.where(i_pars == i_k)[0][0]) for (i_k,j_l) in pargen_keys]
@@ -1469,7 +1471,7 @@ class Pedigree:
                     down_sex = -(j_par_closest[0] + 1) # otherwise, use the parent that produced the closest path (incremented by 1 and then flipped signfor encoding)
 
                 # extends closest parental path by adding sex-encoded up/down meioses
-                path_ij = self.extend_path(path_pars, ups=(up_sex,), downs=(down_sex,) )
+                path_ij = self.extend_path(pargen_path, ups=(up_sex,), downs=(down_sex,) )
                 # passes paths through intern_path() to ensure canonical storage
                 path_ij = self.intern_path(path_ij)
                 # constructs the reverse relationship of j to i
@@ -1481,86 +1483,3 @@ class Pedigree:
 
         # handles self-relationships
         self.fill_rel2_self()
-
-    # def fill_rel2_from_rel4(self, force: bool = False):
-    #     '''
-    #     Fills in the object's rel2 dictionary from its rel4 dictionary by compressing each offspring pair's relationship to the shortest parent pair relationship. Only entries i>j are explicitly computed, since the reverse relationships are automatically filled in.
-    #     Parameters:
-    #         force (bool): Whether to overwrite existing entries in the rel2 dictionary. Default is False. When False, overwrites both (i,j) and (j,i) if (i,j) is not present.
-    #     '''
-    #     # iterates over all pairs of individuals (i > j)
-    #     for i in range(self.N):
-    #         for j in range(i+1, self.N):
-    #             # checks if relationship already exists
-    #             if not force and (i,j) in self.rel2:
-    #                 continue
-    #             # gets the compressed relationship of i to j
-    #             ped_ij = self.compress_rel4_to_rel2(i, j)
-    #             # if no relationship exists (unrelated), skips
-    #             if ped_ij is  None:
-    #                 continue
-                
-    #             # passes paths through intern_path to ensure canonical storage
-    #             ped_ij.path = self.intern_path(ped_ij.path)
-
-    #             # constructs the reverse relationship of j to i
-    #             ped_ji = self.reverse_pairwise(ped_ij) # (path is interned inside function)
-                
-    #             # stores both relationships
-    #             self.rel2[(i,j)] = ped_ij
-    #             self.rel2[(j,i)] = ped_ji
-        
-    #     # handles self-relationships
-    #     self.fill_rel2_self()
-
-    # def construct_rel4(self, par_idx: np.ndarray, par_ped: 'Pedigree'):
-    #     '''
-    #     Constructs the rel4 dictionary for the current generation based on the Population.relations['par_idx'] matrix from the Population object and the Pedigree of the parents.
-    #     Parameters:
-    #         par_idx (2D array): N x 2 array of parent indices for each offspring in the current population. Each row corresponds to an offspring, with the first column being the mother index and the second column being the father index. The index is given in the context of the parent population.
-    #         par_ped (Pedigree): The Pedigree object of the parent population.
-    #     '''
-    #     N_offspring = par_idx.shape[0] # this should be the same as self.N!
-    #     if N_offspring != self.N:
-    #         raise ValueError("Number of offspring in rel_parents does not match self.N.")
-        
-    #     # stores unique offspring parent pairs
-    #     parent_pairs = {}
-    #     for i in range(N_offspring):
-    #         i_par_indices = tuple( par_idx[i, :]) # (mom ID, dad ID)
-    #         if len(i_par_indices) != 2:
-    #             raise ValueError("Each offspring must have exactly two parents.")
-    #         if i_par_indices not in parent_pairs:
-    #             parent_pairs[i_par_indices] = [i]
-    #         else:
-    #             parent_pairs[i_par_indices].append(i)
-
-    #     # nested loop galore, i know
-    #     # nested loop through each parent pair combination
-    #     parent_pairs_items = list(parent_pairs.items())
-    #     for i_pars_idx in range(len(parent_pairs_items)):
-    #         i_pars = parent_pairs_items[i_pars_idx][0]
-    #         for j_pars_idx in range(i_pars_idx, len(parent_pairs_items)):
-    #             j_pars = parent_pairs_items[j_pars_idx][0]
-    #             # gets each parent pairs' offspring
-    #             i_offspring = parent_pairs[i_pars]
-    #             j_offspring = parent_pairs[j_pars]
-    #             # fills in rel4 for each offspring pair
-    #             # loops through each cross-parent pair
-    #             for k in (0,1):
-    #                 for l in (0,1):
-    #                     # gets path objectbetween the two cross-parents
-    #                     ik_jl_path_obj = par_ped.rel2.get( (i_pars[k], j_pars[l]) )
-    #                     # doesn't fill in anything if parents are unrelated
-    #                     if ik_jl_path_obj is None:
-    #                         continue
-    #                     # extracts (canonical) path
-    #                     ik_jl_path = self.intern_path(ik_jl_path_obj.path)
-    #                     # stores parent path in rel4 for each offspring pair
-    #                     for i in i_offspring:
-    #                         for j in j_offspring:
-    #                             if i == j:
-    #                                 continue # skips self-relationships when the two pairs are actually just the same (e.g. siblings). Still computes pairwise relationships between siblings
-    #                             # stores path for offspring pair and its reverse
-    #                             self.rel4[(i,j,k,l)] = ik_jl_path
-    #                             self.rel4[(j,i,l,k)] = self.reverse_path(ik_jl_path)
