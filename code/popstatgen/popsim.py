@@ -15,12 +15,13 @@ from . import statgen_functions as stat
 # other imports
 import numpy as np
 import matplotlib.pyplot as plt
-from typing import Tuple, Union, Dict, Optional
+from typing import Tuple, Union, Dict, Optional, List
 from dataclasses import dataclass
 from scipy import sparse
 from scipy.linalg import block_diag
 import copy
 import inspect
+import warnings
 
 class Population:
     '''
@@ -96,14 +97,14 @@ class Population:
         self.R = pop.generate_LD_blocks(self.M) # recombination rates
         self.K = np.diag(np.ones(self.N)) # kinship matrix (initially identity, not functional yet)
         self.track_pedigree = track_pedigree # whether to track pedigree information
-        self.keep_past_generations = keep_past_generations # how many past generations to keep in memory
+        # how many past generations to keep in memory
         self.past = [self]
-        for _ in range(keep_past_generations):
-            self.past.append(None) # initializes past generations' objects as None
+        self.update_keep_past_gens(keep_past_generations=keep_past_generations)
         Haplos = np.full_like(H, -1, dtype=int) # initializes haplotype ID array with -1s
 
         # further attributes
         self._update_obj(H=H, Haplos=Haplos, update_past=False)
+        self.assign_sex() # assigns sex (F:0 / M:1)
         self.relations = pop.initialize_relations(self.N)
         self.ped = Pedigree(self.N)
 
@@ -113,6 +114,24 @@ class Population:
                             P = self.P)
         self._initialize_metrics(G = self.G)
     
+    def update_keep_past_gens(self, keep_past_generations: int):
+        '''
+        Small function for structuring the 'past' attribute to reflect the number of generations in the past that are stored in the current population object. If the number of past generations is reduced, the older generations are removed from the array. If the number if past generations is increased, 'past' array is padded with Nones for future compatibility.
+        Parameters:
+            keep_past_generations (int): Number of past generations to keep in the object.
+        '''
+        current_past_gens = len(self.past) - 1 # should also just be self.keep_past_generations
+        if keep_past_generations < current_past_gens:
+            self.past = self.past[0:keep_past_generations + 1]
+        elif keep_past_generations > current_past_gens:
+            for _ in range(current_past_gens, keep_past_generations):
+                self.past.append(None) # initializes past generations' objects as None
+        elif keep_past_generations > 0:
+            warnings.warn(f'Number of past generations kept is already {keep_past_generations}')
+        
+        self.keep_past_generations = keep_past_generations
+
+
     def make_sites_indep(self):
         '''
         Changes the recombination rates to make all sites independent.
@@ -198,7 +217,7 @@ class Population:
             raise Exception('Must keep at least 1 past generation to track pedigree.')
         # makes new Pedigree object from scratch, and then fills it in with the new relationships
         self.ped = Pedigree(self.N)
-        self.ped.construct_rel4(self.relations['parents'], self.past[1].ped)
+        self.ped.construct_rel4(self.relations['par_idx'], self.past[1].ped)
         self.ped.fill_rel2_from_rel4()
 
     def store_neighbor_matrix(self, LDwindow: float = None) -> sparse.coo_matrix:
@@ -258,9 +277,18 @@ class Population:
         self.traits[name].h2_true = self.traits[name].get_h2_true()
         self.traits[name].h2_trues = np.expand_dims(self.traits[name].h2_true, axis=0)
     
+    def add_trait_from_fixed_values(self, name: str, y: np.ndarray):
+        '''
+        Initializes and generates trait from specified fixed trait values. No sub component or effects (e.g. genetic, random effects) are stored.
+        Parameters:
+            name (str): Name of trait.
+            y (1D array): Trait values for each individual in the population.
+        '''
+        self.traits[name] = Trait.from_fixed_values(y)
+
     def update_traits(self, fixed_h2: bool = True, traits: list = None):
         '''
-        Updates all traits by generating based on the current genotype matrix. Random noise components are re-generated. Causal genetic effects remain fixed.
+        Updates all traits by generating based on the current genotype matrix. Random noise components are re-generated. Causal genetic effects remain fixed. Only updates traits of composite type, except for sex, which is assigned through assign_sex().
 
         Parameters:
             fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability. Default is True.
@@ -273,14 +301,23 @@ class Population:
             if key not in traits:
                 continue
             trait = self.traits[key]
-            trait.generate_trait(self.G, fixed_h2=fixed_h2)
-            # computes true heritability
-            trait.h2_true = trait.get_h2_true()
-            # adds to running heritability history
-            t_last = trait.h2_trues.shape[0]
-            h2_add = np.full(self.t - t_last + 1, np.nan)
-            h2_add[-1] = trait.h2_true
-            trait.h2_trues = np.concatenate( (trait.h2_trues, h2_add) )
+            if trait.type == 'composite':
+                # trait object already contains allelic effects, which are applied to new genotypes
+                trait.generate_trait(self.G, fixed_h2=fixed_h2)
+            elif key == 'sex':
+                self.assign_sex()
+
+    def assign_sex(self):
+        '''
+        Randomly assigns half of individuals to being female (0) and other half to being male (1). Requires population size to be even.
+        '''
+        if self.N % 2 != 0:
+            raise Exception('Population size must be even to assign sex equally and for mating purposes.')
+        sex_arr = np.zeros(self.N, dtype=np.uint8)
+        # randomly assigns exactly half of indices to be 1s
+        sex_arr[np.random.choice(self.N, self.N // 2, replace=False)] = 1
+        # adds sex as a Trait object (with name 'sex')
+        self.add_trait_from_fixed_values(name='sex', y=sex_arr)
 
     #######################################
     #### Analysis of object attributes ####
@@ -404,7 +441,8 @@ class Population:
         Parameters:
             generations (int): Number of generations to simulate (beyond the current generation).
             related_offspring (bool): Whether the offspring of the next generation should be directly related to parents from previous generation by simulating meiosis and haplotype transfer. Default is False, meaning that future offspring have haplotypes drawn randomly from allele frequencies.
-            trait_updates (bool): Whether to update traits after each generation. Default is False, meaning that traits are only updated at the end of the simulation.
+            trait_updates (bool): Whether to update traits after each generation. However, sex is always updated in each generation, regardless of this setting. Default is False, meaning that traits are only updated at the end of the simulation.
+            fixed_h2 (bool): Whether the variance of the noise component should be updated to maintain the heritability when updating traits. Default is False.
             **kwargs: All other arguments are passed to the `next_generation` or `generate_offspring` methods. See those methods for details.
         '''
         # preps metrics for new generations
@@ -425,6 +463,8 @@ class Population:
             self._update_temp_metrics(t, G=self.G)
             if trait_updates:
                 self.update_traits(fixed_h2=fixed_h2)
+            else:
+                self.update_traits(traits=['sex']) # always updated in each generation
         self.T_breaks.append(previous_gens + generations)
         if not trait_updates:
             self.update_traits(fixed_h2=fixed_h2)
@@ -469,10 +509,9 @@ class Population:
         else:
             AM_values = np.zeros(self.N)
 
-        # randomly splits up population into maternal (M) and paternal (P) halves 
-        # also shuffles their order
-        iMs = np.random.choice(self.N, N2, replace=False)
-        iPs = np.setdiff1d(np.arange(self.N), iMs)
+        # extracts mom (female) and dad (male) indices and shuffles their order
+        iMs = np.random.choice(np.where(self.traits['sex'].y == 0)[0], N2, replace=False)
+        iPs = np.random.choice(np.where(self.traits['sex'].y == 1)[0], N2, replace=False)
 
         # computes mate value
         mate_values = AM_r * AM_values + np.random.normal(scale = np.sqrt(1-AM_r**2), size=self.N)
@@ -538,6 +577,7 @@ class Population:
         haplo_ks = (haplo_k0[:, None, :] + haplo_phase) % 2
 
         rel_parents = np.zeros((N_offspring, self.N), dtype=bool) # relationship matrix for parent-child relationships
+        par_idx = np.full((N_offspring, 2), -1, dtype=np.int32) # initializes parent index array
         H = np.empty((N_offspring, self.M, self.P), dtype=int)
         Haplos = np.full_like(H, -1) # initializes haplotype ID array with -1s
         for i in np.arange(N_offspring):
@@ -547,8 +587,9 @@ class Population:
             haploM = self.H[iM, np.arange(self.M), haplo_ks[i, :, 0]]
             haploP = self.H[iP, np.arange(self.M), haplo_ks[i, :, 1]]
             haplos = np.stack((haploM, haploP), axis = 1)
-            # shuffles haplotypes around
-            chr_order = np.random.choice(self.P, size=self.P, replace=False)
+            # shuffles haplotypes around. [EDIT]: nevermind, want to keep consistent maternal vs paternal order
+            # chr_order = np.random.choice(self.P, size=self.P, replace=False)
+            chr_order = np.arange(self.P)
             haplos = haplos[:,chr_order]
             H[i,:,:] = haplos
 
@@ -561,9 +602,10 @@ class Population:
             Haplos_i = Haplos_i[:,chr_order]
             Haplos[i,:,:] = Haplos_i
 
-            # updates relationship matrix for parent-child relationships
+            # updates relationship matrix for parent-child relationships, and stores parent indices
             rel_parents[i, iM] = 1
             rel_parents[i, iP] = 1
+            par_idx[i, :] = [iM, iP] # mom is always col 0, dad is always col 1
 
         # Mutations ####
         if isinstance(mu, (float, int)):
@@ -575,6 +617,7 @@ class Population:
         # updates relationship matrix for parent-child relationships
         relations = {'spouses': rel_spouses.astype(np.uint8), # occupies more space than a bool, but cleaner to see
                      'parents': rel_parents.astype(np.uint8),
+                     'par_idx': par_idx, # stores actual indices of parents
                      'full_sibs': rel_fullsibs.astype(np.uint8),
                      'household': M_mate.astype(np.uint8)}
 
@@ -582,13 +625,10 @@ class Population:
 
     def flatten_generations(self, generations: int = 1) -> 'Population':
         '''
-        Combines the current generation with the specified number of past generations into a new single population object that is returned. Importantly, it updates the relationship matrices to reflect the relationships in the combined generations. Currently, only one past generation is supported.
+        Combines the current generation with the specified number of past generations into a new single population object that is returned. Importantly, it updates the relationship and Pedigree matrices to reflect the relationships in the combined generations.
         Parameters:
-            generations (int): Number of past generations to include in the new population object. Default is 1, meaning only the current generation is included (only supported currently).
+            generations (int): Number of past generations to include in the new population object. Default is 1, meaning only the current and the previous generation are combined.
         '''
-        # if generations !=1:
-        #     raise NotImplementedError("Only one past generation is supported.")
-        
         # creates a SuperPopulation object with the current generation and the specified number of past generations
         pops = []
         Ns = []
@@ -596,12 +636,13 @@ class Population:
             pops.append(self.past[i]) # at i=0, references itself
             Ns.append(self.past[i].N)
         spop = SuperPopulation(pops)
-        # combines the two populations together inside the SuperPopulation object
+        # combines the populations together inside the SuperPopulation object
         pops_i = list(range(generations + 1))
         spop.join_populations(pops_i)
-        new_pop = spop.pops[-1]  # the last population in the SuperPopulation is the combined one
+        new_pop = spop.pops[-1] # the last population in the SuperPopulation is the combined one
+        new_pop.keep_past_generations = self.keep_past_generations
         new_pop.relations = pop.initialize_relations(new_pop.N)
-        del new_pop.relations['parents']
+        del new_pop.relations['parents'] # default parents matrix is not accurate here
 
         # updates relationship matrices in combined population
         # full_sibs
@@ -620,6 +661,51 @@ class Population:
             parent_child[i_start:i_end, j_start:j_end] = gen_parents
             parent_child[j_start:j_end, i_start:i_end] = gen_parents.T
 
+        # creates accurate Pedigree object for combined population
+        # only rel2 can be computed for this initial flattened generation
+        Ns_cumsum = np.cumsum([0] + Ns)
+        for gen in range(generations+1):
+            # fills in main diagonal blocks
+            for key, value in pops[gen].ped.rel2.items():
+                # need to shift indices based on generation
+                if gen > 0:
+                    key = (key[0] + Ns_cumsum[gen], key[1] + Ns_cumsum[gen])
+                new_pop.ped.rel2[key] = value
+            # fills in off diagonal blocks
+            if gen == generations:
+                continue # no more generations to link to
+            # loops through pairs of individuals in current generation and individuals in their parent generation
+            for i in range(Ns[gen]):
+                for j in range(Ns[gen + 1]):
+                    # gets indices (w.r.t. parent generation) of i's parents
+                    i_pars = np.flatnonzero( pops[gen].relations['parents'][i,:] )
+                    par_keys = ( (i_par, j) for i_par in i_pars ) # prepares keys for get_shortest_path
+                    # determines the shortest path between i and j through i's parents
+                    shortest_par_path, shortest_path_keys, shortest_path_par_pairs = new_pop.ped.get_shortest_path(pops[gen+1].ped.rel2, par_keys)
+                    if shortest_par_path is None:
+                        continue # no relationship, don't store anything
+                    else:
+                        shortest_par_path = self.ped.intern_path(shortest_par_path)
+
+                    # extract the parent index (k: 0/1) of i that is closest to j
+                    # in the case that individual j is equally related to both of i's parents, just takes the first one (arbitrary) (denoted by the first [0] below)
+                    k = np.where(i_pars == shortest_path_keys[0][0]) # the second [0] denotes we are taking the index of i's parent that is closest to j
+
+                    # extracts the parent index 
+                    
+                    
+                    # extends path to include extra up meiosis (i-->j)
+                    path_ij = new_pop.ped.extend_path(shortest_par_path, ups=1, downs=0)
+                    path_ij_par_pair = shortest_path_par_pairs
+                    # prepares keys for new flattened population
+                    key_ij = (i + Ns_cumsum[gen], j + Ns_cumsum[gen + 1])
+                    new_pop.ped.rel2[key_ij] = path_ij
+
+                    # fills in reverse direction as well
+                    path_ji = new_pop.ped.reverse_path(path_ij)
+                    key_ji = (j + Ns_cumsum[gen + 1], i + Ns_cumsum[gen])
+                    new_pop.ped.rel2[key_ji] = path_ji
+            
         # actually sets relations
         new_pop.relations['full_sibs'] = full_sibs
         new_pop.relations['spouses'] = spouses
@@ -772,6 +858,18 @@ class Trait:
         trait._initialize_effects(G, effects, var_Eps)
         trait.generate_trait(G, fixed_h2=False, random_effects=random_effects)
         return trait
+
+    @classmethod
+    def from_fixed_values(cls, y: np.ndarray) -> 'Trait':
+        '''
+        Initializes a trait from a given array of fixed trait values. No sub component or effects (e.g. genetic, random effects) are stored.
+        Parameters:
+            y (1D array): N-length array of trait values.
+        '''
+        trait = cls.__new__(cls)
+        trait.y = y
+        trait.type = 'fixed'
+        return trait
     
     def _initialize_effects(self, G: np.ndarray, effects: np.ndarray, var_Eps: float = 0.0):
         '''
@@ -822,6 +920,9 @@ class Trait:
         # computes actual trait as additive of individual components
         self.y = y_nonEps + self.y_['Eps']
 
+        # sets trait type has being a composite of multiple components
+        self.type = 'composite'
+
     def get_h2_true(self) -> float:
         '''
         Returns the true narrow-sense heritability of the trait, which is variance of the genetic component divided by the variance of the trait.
@@ -871,18 +972,24 @@ class Trait:
         Returns:
             trait_new (Trait): A new Trait object containing the concatenated trait.
         '''
-        # pulls per-allele effects from first population's Trait object   
-        effects_per_allele = traits[0].effects_per_allele
-        # creates placeholder Trait object (attributes will largely be overwritten)
-        trait_new = cls.from_effects(G, effects=effects_per_allele, per_allele=True)
+        # if trait has components, then those effects (e.g. allelic effects)needs to be carried over
+        if traits[0].type == 'composite':
+            # pulls per-allele effects from first population's Trait object   
+            effects_per_allele = traits[0].effects_per_allele
+            # creates placeholder Trait object (attributes will largely be overwritten)
+            trait_new = cls.from_effects(G, effects=effects_per_allele, per_allele=True)
+        elif traits[0].type == 'fixed':
+            trait_new = cls.from_fixed_values(np.array([])) # creates empty Trait object to be filled in below
+        
         # concatenates trait components
         trait_new.y = np.concatenate([trait.y for trait in traits])
-        for component in traits[0].y_.keys():
-            # assumes all traits have the same components
-            trait_new.y_[component] = np.concatenate([trait.y_[component] for trait in traits])
-        # updates variance components
-        trait_new.var['Eps'] = trait_new.y_['Eps'].var()
-        trait_new.h2 = trait_new.get_h2_var()
+        if trait_new.type == 'composite':
+            for component in traits[0].y_.keys():
+                # assumes all traits have the same components
+                trait_new.y_[component] = np.concatenate([trait.y_[component] for trait in traits])
+            # updates variance components
+            trait_new.var['Eps'] = trait_new.y_['Eps'].var()
+            trait_new.h2 = trait_new.get_h2_var()
 
         return trait_new
 
@@ -931,11 +1038,11 @@ class SuperPopulation:
         if isinstance(pops, Population):
             # if only a single population is passed, convert it to a list
             pops = [pops]
-        self.pops = pops.copy()  # makes a copy of the list of populations
+        self.pops = pops.copy() # makes a copy of the list of populations
         # initializes basic attributes
-        self.era = 0 # starts at 1
+        self.era = 0 # will get updated to 1 by _update_era() below
         # creates active vector
-        self.active = [True] * len(pops)  # active populations as boolean
+        self.active = [True] * len(pops) # active populations as boolean
         self._update_era() # initializes active indices and history
         # creates lineage graph (adjacency matrix) for populations
         self._expand_graph()
@@ -1201,61 +1308,104 @@ class Pedigree:
 
     def intern_path(self, path: PedPath) -> PedPath:
         '''
-        Return the canonical tuple object for this PedPath.
-        Small wrapper around dict.setdefault for clarity.
+        Return the canonical tuple object for this PedPath. Small wrapper around dict.setdefault for clarity.
         '''
         return self._paths.setdefault(path, path)
 
-    @staticmethod
-    def extend_parent_path_to_offspring(parent_pair_path: PedPath) -> PedPath:
+    def extend_path(self, path: PedPath, ups: int = 1, downs: int = 1) -> PedPath:
         '''
-        Given a path between two parents, extends it to the offspring pair by adding one meiosis up and one meiosis down.
+        Given a path, extends it by adding the specified number of meioses up and down. Also interns the path before returning.
+        Parameters:
+            path (PedPath): The path to extend.
+            ups (int): Number of meioses to add going up the pedigree (added at beginning of path). Default is 1.
+            downs (int): Number of meioses to add going down the pedigree (added at end of path). Default is 1.
+        Returns:
+            PedPath: The extended path.
         '''
-        offspring_pair_path = (1,) + parent_pair_path + (-1,)
-        return offspring_pair_path
+        extended_path = (1,) * ups + path + (-1,) * downs
+        return self.intern_path(extended_path)
     
+    @staticmethod
+    def get_shortest_path(rel_dict: Dict, keys: Tuple) -> Tuple[Optional[PedPath], List, Optional[List]]:
+        '''
+        Given a dictionary of relationships and a list of keys, returns the shortest path among the keys.
+        Parameters:
+            rel_dict (Dict): Dictionary of relationships.
+            keys (Tuple): Tuple of keys to check.
+        Returns:
+            tuple ((shortest_path, shortest_path_keys, shortest_path_par_pairs)):
+            Where:
+            - shortest_path (PedPath): The shortest path found among the keys.
+            - shortest_path_keys (List): List of keys that correspond to the shortest path.
+            - shortest_path_par_pairs (List): Nested list of parent pairs that correspond to the shortest path, for the respective key (only for rel2 dicts; None for rel4 dicts).
+        '''
+        # determines if the given dict is a rel2 or rel4 dict by checking the length of the first key
+        len_keys = len(keys[0]) # if 2, then rel2; if 4, then rel4
+        shortest_path = None # PedPath
+        shortest_path_keys = []
+        shortest_path_par_pairs = [] if len_keys == 2 else None
+        for key in keys:
+            path = rel_dict.get(key)
+            # skips if pair is unrelated
+            if path is None:
+                continue
+
+            # if rel2, then need to actually extract PedPath from PedPairwise (and also the parent pairs that produced it)
+            if len_keys == 2:
+                path_par_pairs = path.parent_pair
+                path = path.path
+            
+            # if the path is the shortest yet, it stores it solely
+            if shortest_path is None or len(path) < len(shortest_path):
+                shortest_path = path
+                shortest_path_keys = [key]
+                shortest_path_par_pairs = path_par_pairs if len_keys == 2 else None
+            # if the path ties for shortest, we need to be more careful
+            elif len(path) == len(shortest_path):
+                # if the paths are identical, we can just append the key
+                if path == shortest_path:
+                    shortest_path_keys.append(key)
+                    shortest_path_par_pairs.append(path_par_pairs) if len_keys == 2 else None
+
+                # if the paths  are different, we (arbitrarily) choose to keep the path with more negative steps (more meioses down)
+                else:
+                    if path.count(-1) > shortest_path.count(-1):
+                        shortest_path = path
+                        shortest_path_keys = [key]
+                        shortest_path_par_pairs = [path_par_pairs] if len_keys == 2 else None
+        return shortest_path, shortest_path_keys, shortest_path_par_pairs
+
     def compress_rel4_to_rel2(self, i: int, j: int) -> Optional[PedPairwise]:
         '''
         Given two individuals' parents, returns the relationship relative to the parent pair with the shortest path. Specifically, it is the path of i to j.
+        Parameters:
+            i (int): Index of individual i.
+            j (int): Index of individual j.
+        Returns:
+            Optional[PedPairwise]: The relationship between individuals i and j, or None if they are unrelated
         '''
-        shortest_path = None # PedPath
-        shortest_path_pairs = []
-        for k in (0,1): # individual i's parental indices (mom/dad : 0/1)
-            for l in (0,1): # individual j's parental indices (mom/dad : 0/1)
-                # extracts path for specified parent pair
-                key4 = (i,j,k,l)
-                parent_pair_path = self.rel4.get(key4)
-                # skips if parent pair is unrelated
-                if parent_pair_path is None:
-                    continue
-                
-                # if the parent path is the shortest yet, it stores it solely
-                if shortest_path is None or len(parent_pair_path) < len(shortest_path):
-                    shortest_path = parent_pair_path
-                    shortest_path_pairs = [(k,l)]
-                # if the parent path ties for shortest, we need to be more careful
-                elif len(parent_pair_path) == len(shortest_path):
-                    # if the paths are identical, we can just add the parent pair indices
-                    if parent_pair_path == shortest_path:
-                        shortest_path_pairs.append((k,l))
-                    # if they are different, we (arbitrarily) choose to keep the path with more negative steps (more meioses down)
-                    else:
-                        if parent_pair_path.count(-1) > shortest_path.count(-1):
-                            shortest_path = parent_pair_path
-                            shortest_path_pairs = [(k,l)]
-
+        # there are four possible parent pairs (k,l) for the offspring pair (i,j)
+        parent_pair_keys = [(i,j,k,l) for k in (0,1) for l in (0,1)]
+        # extracts shortest path among parent pairs from rel4 dictionary
+        shortest_path, shortest_path_keys, _ = self.get_shortest_path(self.rel4, parent_pair_keys)
+        
         # if all parent pairs are unrelated, then so is the offspring pair
         if shortest_path is None:
             return None
         else:
+            # we only care about the parent pairs (k,l) for the offspring pair (i,j)
+            shortest_path_pairs = [ (k,l) for (_,_,k,l) in shortest_path_keys ]
             # extends the shortest parent path to the offspring pair path
-            i2j_path = self.extend_parent_path_to_offspring(shortest_path)
-            i2j_path = self.intern_path(i2j_path) # converts to canonical path
+            i2j_path = self.extend_path(shortest_path, ups=1, downs=1)
             return PedPairwise(path=i2j_path, parent_pair=tuple(shortest_path_pairs))
+    
     def reverse_path(self, path: PedPath) -> PedPath:
         '''
-        Reverse a PedPath (flip order and sign) and intern it.
-        Example: (1,-1,-1) -> (1,1,-1)
+        Reverse a PedPath (flip order and sign) and intern it. Example: (1,-1,-1) -> (1,1,-1). Also interns the path before returning.
+        Parameters:
+            path (PedPath): The path to reverse.
+        Returns:
+            PedPath: The reversed path.
         '''
         reversed_path = tuple(-step for step in path[::-1])
         return self.intern_path(reversed_path)
@@ -1263,6 +1413,10 @@ class Pedigree:
     def reverse_pairwise(self, pw_ij: PedPairwise) -> PedPairwise:
         '''
         Reverse a PedPairwise: flip path and flip parent positions (k,l) -> (l,k).
+        Parameters:
+            pw_ij (PedPairwise): The PedPairwise to reverse.
+        Returns:
+            PedPairwise: The reversed PedPairwise.
         '''
         pw_ji_path = self.reverse_path(pw_ij.path)
         pw_ji_pairs = tuple((l, k) for (k, l) in pw_ij.parent_pair)
@@ -1281,9 +1435,9 @@ class Pedigree:
 
     def fill_rel2_from_rel4(self, force: bool = False):
         '''
-        Fills in the rel2 dictionary from the rel4 dictionary by compressing each offspring pair's relationship to the shortest parent pair relationship.
+        Fills in the object's rel2 dictionary from its rel4 dictionary by compressing each offspring pair's relationship to the shortest parent pair relationship. Only entries i>j are explicitly computed, since the reverse relationships are automatically filled in.
         Parameters:
-            force (bool): Whether to overwrite existing entries in the rel2 dictionary. Default is False. Checks only (i,j), but overwrites both (i,j) and (j,i) if not present.
+            force (bool): Whether to overwrite existing entries in the rel2 dictionary. Default is False. When False, overwrites both (i,j) and (j,i) if (i,j) is not present.
         '''
         # iterates over all pairs of individuals (i > j)
         for i in range(self.N):
@@ -1296,8 +1450,12 @@ class Pedigree:
                 # if no relationship exists (unrelated), skips
                 if ped_ij is  None:
                     continue
+                
+                # passes paths through intern_path to ensure canonical storage
+                ped_ij.path = self.intern_path(ped_ij.path)
+
                 # constructs the reverse relationship of j to i
-                ped_ji = self.reverse_pairwise(ped_ij)
+                ped_ji = self.reverse_pairwise(ped_ij) # (path is interned inside function)
                 
                 # stores both relationships
                 self.rel2[(i,j)] = ped_ij
@@ -1306,18 +1464,21 @@ class Pedigree:
         # handles self-relationships
         self.fill_rel2_self()
 
-    def construct_rel4(self, rel_parents: np.ndarray, par_ped: 'Pedigree'):
+    def construct_rel4(self, par_idx: np.ndarray, par_ped: 'Pedigree'):
         '''
         Constructs the rel4 dictionary for the current generation based on the Population.relations['parents'] matrix from the Population object and the Pedigree of the parents.
+        Parameters:
+            par_idx (2D array): N x 2 array of parent indices for each offspring in the current population. Each row corresponds to an offspring, with the first column being the mother index and the second column being the father index. The index is given in the context of the parent population.
+            par_ped (Pedigree): The Pedigree object of the parent population.
         '''
-        N_offspring = rel_parents.shape[0] # this should be the same as self.N!
+        N_offspring = par_idx.shape[0] # this should be the same as self.N!
         if N_offspring != self.N:
             raise ValueError("Number of offspring in rel_parents does not match self.N.")
         
         # stores unique offspring parent pairs
         parent_pairs = {}
         for i in range(N_offspring):
-            i_par_indices = tuple( np.flatnonzero(rel_parents[i, :]) ) # should always be a tuple of length 2
+            i_par_indices = tuple( par_idx[i, :]) # (mom ID, dad ID)
             if len(i_par_indices) != 2:
                 raise ValueError("Each offspring must have exactly two parents.")
             if i_par_indices not in parent_pairs:

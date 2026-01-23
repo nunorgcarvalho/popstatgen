@@ -287,6 +287,7 @@ def initialize_relations(N: int, N1: int = None):
         N1 = N
     relations = {
         'parents': np.zeros((N, N1), dtype=np.uint8),
+        'par_idx': np.full((N, 2), -1, dtype=np.int32), # stores actual indices of parents (-1 denotes unknown)
         'full_sibs': np.zeros((N, N), dtype=np.uint8),
         'spouses': np.zeros((N, N), dtype=np.uint8),
         'household': np.zeros((N, N), dtype=np.uint8),
