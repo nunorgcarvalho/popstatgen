@@ -640,7 +640,7 @@ class Population:
         spop = SuperPopulation(pops)
         # combines the populations together inside the SuperPopulation object
         pops_i = list(range(generations + 1))
-        spop.join_populations(pops_i)
+        spop.join_populations(pops_i, shared_haplotypes=True)
         new_pop = spop.pops[-1] # the last population in the SuperPopulation is the combined one
         new_pop.keep_past_generations = self.keep_past_generations
         new_pop.relations = pop.initialize_relations(new_pop.N)
@@ -1162,11 +1162,12 @@ class SuperPopulation:
         if update_era: 
             self._update_era() # updates era, active indices, and history
 
-    def join_populations(self, pop_i: list):
+    def join_populations(self, pop_i: list, shared_haplotypes: bool = False):
         '''
         Joins multiple populations into a single population. Inactivates the original populations and creates a new population from the merged haplotypes. The new population is added to the superpopulation as an active population.
         Parameters:
             pop_i (list): List of indices of populations to join.
+            shared_haplotypes (bool): Whether the haplotype IDs stored inside the Haplos object of each population refer to the same haplotypes across populations. This is applicable when the populations being joined are either derived from the same ancestral population or are multiple generations of the same population. If true, haplotype IDs of a population are shifted by the number of individuals in the populations preceding it in the array. Default is False.
         '''
         if len(pop_i) < 2:
             raise ValueError("Must specify at least two populations to join.")
@@ -1175,6 +1176,20 @@ class SuperPopulation:
         H = np.concatenate([self.pops[i].H for i in pop_i], axis=0)
         # creates new population from merged haplotypes
         new_pop = Population.from_H(H, keep_past_generations=0)
+
+        # merging Haplotype IDs
+        if shared_haplotypes:
+            Haplos = np.concatenate([self.pops[i].Haplos for i in pop_i], axis=0)
+        else:
+            shift = 0
+            P = self.pops[pop_i[0]].Haplos.shape[2]  # ploidy: number of haplotypes per individual
+            Haplos_list = []
+            for i in pop_i:
+                Haplos_list.append( self.pops[i].Haplos + shift )
+                shift += P * self.pops[i].N
+            Haplos =  np.concatenate(Haplos_list, axis=0)
+
+        new_pop.Haplos = Haplos
         # adds Trait objects by concatenating them, assumes the first population has all traits
         for name in self.pops[pop_i[0]].traits.keys():
             # concatenates traits from all populations being joined

@@ -453,5 +453,6 @@ def compute_K_IBD(Haplos: np.ndarray, standardize: bool = False) -> np.ndarray:
             K_IBD[j, i] = coeff_relatedness
     if standardize:
         K0 = np.mean(K_IBD) # mean relatedness
+        print(f'Mean relatedness before standardization: {K0}')
         K_IBD = (K_IBD - K0) / (1 - K0)
     return K_IBD
