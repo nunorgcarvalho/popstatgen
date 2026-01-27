@@ -696,7 +696,7 @@ class Population:
                         # converts i's ancestor ID (in end_gen indices) to index from i_gen_ancs
                         i_gen_closest_k = np.where(np.isin(i_gen_ancs, i_gen_closest))[0][0]
                         # converts this index to an array of bits, which informs whether a maternal or paternal meiosis happens as one goes up i's lineage to get to their closest ancestor to j
-                        i_gen_closest_bits = np.array( self.to_bits(i_gen_closest_k, gap) )
+                        i_gen_closest_bits = np.array( core.to_bits(i_gen_closest_k, gap) )
                         up_sexes = tuple( i_gen_closest_bits + 1 ) # converts to sex-informed path steps
 
                         # takes path of i's ancestor to j and extends it by the specified meioses
@@ -718,18 +718,6 @@ class Population:
         new_pop.relations['parent_child'] = parent_child
 
         return new_pop
-    
-    @staticmethod
-    def to_bits(n: int, bits: int):
-        '''
-        Converts integer n to list of bits of length `bits`.
-        Parameters:
-            n (int): Integer to convert to bits.
-            bits (int): Number of bits to convert to.
-        Returns:
-            bit_list (list): List of bits representing integer n.
-        '''
-        return [int(b) for b in format(n, f'0{bits}b')]
 
     def get_ancestors(self, base_gen: int = 0, end_gen: int = 1) -> list:
         '''
@@ -1468,23 +1456,6 @@ class Pedigree:
                 closest_path = path
                 closest_path_keys = [key]
             
-            # # first check: path cannot be longer than closest path so far
-            # if len(path) > len(closest_path):
-            #     continue
-            # # second check: path cannot have less (+3) entries than closest path so far 
-            # if path.count(3) < closest_path.count(3):
-            #     continue
-            # # third check: path cannot have less (-1) entries than closest path so far
-            # if path.count(-1) < closest_path.count(-1):
-            #     continue
-            # # if all these checks are passed, we set this as the closest path
-            # # if this path is identical to the previously stored closest path, we append the key
-            # if path == closest_path:
-            #     closest_path_keys.append(key)
-            # else:
-            #     closest_path = path
-            #     closest_path_keys = [key]
-            
         return closest_path, closest_path_keys
     
     def reverse_path(self, path: PedPath) -> PedPath:
@@ -1679,7 +1650,8 @@ class Pedigree:
         rel_summary: Dict[str, int] = {}
         for rel_key, rel_obj in self.rels.items():
             # if idx is specified, only counts relationships involving individual idx
-            if idx is not None and rel_key[0] != idx and rel_key[1] != idx:
+            # only check first slot since the relationship of B to A is stored under (A,B)
+            if idx is not None and rel_key[0] != idx: 
                 continue
             rel_type = getattr(rel_obj, attribute)
             if rel_type in rel_summary:

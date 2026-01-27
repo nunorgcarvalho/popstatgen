@@ -64,6 +64,18 @@ def report_CI(point_and_se: Tuple[float, float], CI: float = 0.95) -> str:
     upper = point + z * se
     return f'{point:.3f} [{lower:.3f}, {upper:.3f}]'
 
+@staticmethod
+def to_bits(n: int, bits: int):
+    '''
+    Converts integer n to list of bits of length `bits`.
+    Parameters:
+        n (int): Integer to convert to bits.
+        bits (int): Number of bits to convert to.
+    Returns:
+        bit_list (list): List of bits representing integer n.
+    '''
+    return [int(b) for b in format(n, f'0{bits}b')]
+
 #######################
 #### Visualization ####
 #######################
