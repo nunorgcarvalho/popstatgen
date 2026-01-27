@@ -1654,25 +1654,66 @@ class Pedigree:
         self._relobjs = {path: self.path_to_relationship(path) for path in self._paths.keys()}
         self.rels = {key: self._relobjs[path] for key, path in self.paths.items()}
 
-    def count_relationships(self, attribute = 'relationship', i: int = None) -> Dict[str, int]:
+    # small class to allow pretty printing of results of count_relationships() to console
+    class CountRelDict:
+        def __init__(self, data):
+            self.data = data
+        def __str__(self):
+            lines = [
+                f"{k:20} {v['count']}"
+                for k, v in self.data.items()
+            ]
+            return "\n".join(lines)
+        def __repr__(self):
+            return f"{self.__str__()}"
+
+    def count_relationships(self, attribute = 'relationship', idx: int = None) -> Dict[str, int]:
         '''
         Counts the number of each type of relationship, or any other specified attribute of the RelObj, in the 'rels' dictionary.
         Parameters:
             attribute (str): The attribute of the RelObj to summarize. Default is 'relationship'.
-            i (int): If specified, only counts relationships involving individual i. Default is None, meaning all relationships are counted.
+            idx (int): If specified, only counts relationships involving individual idx. Default is None, meaning all relationships are counted.
         Returns:
             rel_summary (Dict): Dictionary summarizing the number of each type of relationship.
         '''
         rel_summary: Dict[str, int] = {}
         for rel_key, rel_obj in self.rels.items():
-            # if i is specified, only counts relationships involving individual i
-            if i is not None and rel_key[0] != i and rel_key[1] != i:
+            # if idx is specified, only counts relationships involving individual idx
+            if idx is not None and rel_key[0] != idx and rel_key[1] != idx:
                 continue
             rel_type = getattr(rel_obj, attribute)
             if rel_type in rel_summary:
-                rel_summary[rel_type] += 1
+                rel_summary[rel_type]['count'] += 1
+                rel_summary[rel_type]['keys'].append( (rel_key) )
             else:
-                rel_summary[rel_type] = 1
+                rel_summary[rel_type] = {'count': 1,
+                                         'keys': [(rel_key)]}
         # sorts keys
         rel_summary = dict(sorted(rel_summary.items()))
-        return rel_summary
+        return self.CountRelDict(rel_summary)
+    
+    @staticmethod
+    def summarize_per_relationship(count_rel_dict: 'Pedigree.CountRelDict', data: np.ndarray) -> Dict[str, Dict]:
+        '''
+        Summarizes a specified data value of the inputted data matrix/dictionary per relationship type.
+        Parameters:
+            count_rel_dict (Pedigree.CountRelDict): The output of count_relationships() method.
+            data (np.ndarray): Some object that when indexed by the keys provided in count_rel_dict[relationship]['keys'] returns some value which is to be summarized.
+        Returns:
+            rel_attribute_summary (Dict): Dictionary summarizing the specified attribute per relationship type. Mean, std, min, max, and count are provided.
+        '''
+        rel_attribute_summary: Dict[str, Dict] = {}
+        for rel_type, rel_info in count_rel_dict.data.items():
+            values = []
+            for key in rel_info['keys']:
+                value = data[key]
+                values.append(value)
+            values = np.array(values)
+            rel_attribute_summary[rel_type] = {
+                'mean': np.mean(values),
+                'std': np.std(values),
+                'min': np.min(values),
+                'max': np.max(values),
+                'count': len(values)
+            }
+        return rel_attribute_summary
