@@ -36,6 +36,7 @@ class Population:
 
     def __init__(self, N: int, M: int, P: int = 2,
                  p_init: Union[float, np.ndarray] = None,
+                 R_type: str = 'blocks',
                  keep_past_generations: int = 1,
                  track_pedigree: bool = False,
                  seed: int = None):
@@ -46,6 +47,7 @@ class Population:
             M (int): Total number of variants in genome.
             P (int): Ploidy of genotpes. Default is 2 (diploid).
             p_init (float or array): Initial allele frequency of variants. If only a single value is provided, it is treated as the initial allele frequency for all variants. Alternatively, can be an array of length M for variant-specfic allele frequencies. If not provided, default is uniform distribution of allele frequencies between 0.05 and 0.95.
+            R_type (str). Type of recombination rates to use for genome. Options are: 'blocks' (default) for LD blocks (see pop.generate_LD_blocks()), 'indep' for independent sites (see self.make_sites_indep()), or 'uniform' for uniform recombination rates across genome (see pop.generate_chromosomes()). Resulting recombination rate array is stored in Population.R.
             keep_past_generations (int): Number of past generations to keep in the object. Default is 1, meaning the past generation is kept (on top of the current generation).
             track_pedigree (bool): Whether to track pedigree information (stored in Population.ped). Must keep at least 1 past generation. Default is False.
             seed (int): Initial seed to use when simulating genotypes (and allele frequencies if necessary).
@@ -65,14 +67,15 @@ class Population:
         H = pop.draw_binom_haplos(p_init, N, P)
 
         # passes haplotype to base constructor for further initialization
-        self._initialize_H(H, keep_past_generations=keep_past_generations, track_pedigree=track_pedigree)
+        self._initialize_H(H, R_type=R_type, keep_past_generations=keep_past_generations, track_pedigree=track_pedigree)
     
     @classmethod
-    def from_H(cls, H: np.ndarray, keep_past_generations: int = 1, track_pedigree: bool = False):
+    def from_H(cls, H: np.ndarray, R_type: str = 'blocks', keep_past_generations: int = 1, track_pedigree: bool = False):
         '''
         Initializes a population from a given haplotype array.
         Parameters:
             H (3D array): N*M*P array of haplotypes. First dimension is individuals, second dimension is variants, and third dimension is haplotype number (related to ploidy). Each element is either a 0 or a 1.
+            R_type (str). Type of recombination rates to use for genome. Options are: 'blocks' (default) for LD blocks (see pop.generate_LD_blocks()), 'indep' for independent sites (see self.make_sites_indep()), or 'uniform' for uniform recombination rates across genome (see pop.generate_chromosomes()). Resulting recombination rate array is stored in Population.R.
             keep_past_generations (int): Number of past generations to keep in the object. Default is 1, meaning the past generation is kept (on top of the current generation).
             track_pedigree (bool): Whether to track pedigree information (stored in Population.ped). Must keep at least 1 past generation. Default is False.
         Returns:
@@ -81,10 +84,10 @@ class Population:
         # creates new instance of class
         pop = cls.__new__(cls)
         # initializes the object with the given haplotype array
-        pop._initialize_H(H, keep_past_generations=keep_past_generations, track_pedigree=track_pedigree)
+        pop._initialize_H(H, R_type=R_type, keep_past_generations=keep_past_generations, track_pedigree=track_pedigree)
         return pop
 
-    def _initialize_H(self, H: np.ndarray, keep_past_generations: int = 1, track_pedigree: bool = False):
+    def _initialize_H(self, H: np.ndarray, R_type: str = 'blocks', keep_past_generations: int = 1, track_pedigree: bool = False):
         '''
         Initializes a population from a given haplotype array. See the `from_H` class method for details.
         '''
@@ -96,7 +99,13 @@ class Population:
         self.T_breaks = [self.t] # simulation breaks
         self.traits = {}
         self.BPs = np.arange(self.M) # variant positions in base pairs (BPs)
-        self.R = pop.generate_LD_blocks(self.M) # recombination rates
+        # recombination rates
+        if R_type == 'blocks':
+            self.R = pop.generate_LD_blocks(self.M)
+        elif R_type == 'indep':
+            self.make_sites_indep()
+        elif R_type == 'uniform':
+            self.R = pop.generate_chromosomes(self.M, chrs=1, meioses_per_chr=1)
         self.K = np.diag(np.ones(self.N)) # kinship matrix (initially identity, not functional yet)
         self.track_pedigree = track_pedigree # whether to track pedigree information
         # how many past generations to keep in memory
@@ -579,7 +588,7 @@ class Population:
         haplo_ks = (haplo_k0[:, None, :] + haplo_phase) % 2
 
         rel_parents = np.zeros((N_offspring, self.N), dtype=bool) # relationship matrix for parent-child relationships
-        par_idx = np.full((N_offspring, 2), -1, dtype=np.int32) # initializes parent index array
+        par_idx = np.full((N_offspring, 2), -1, dtype=int) # initializes parent index array
         H = np.empty((N_offspring, self.M, self.P), dtype=int)
         Haplos = np.full_like(H, -1) # initializes haplotype ID array with -1s
         for i in np.arange(N_offspring):
@@ -742,6 +751,45 @@ class Population:
                 current_inds = next_inds
             ancestors.append(i_ancestors)
         return ancestors
+    
+    def extract_IBD_segments(self, i_idxs: list = None, j_idxs: list = None, i_chrs: list = [0,1], j_chrs: list = [0,1]):
+        '''
+        Extracts IBD segments between all pairs of individuals of individuals (i,j). Returns a list of IBDSegment objects, which store information about the individuals inside it, among other things. IBD is not checked between the same individuals, and each pair is only uniquely tested once (i.e. if the same individuals are specified in both i_idxs and j_idxs, only the (i,j) pair is stored).
+
+        Parameters:
+            i_idxs (list): List of individual indices for whom to extract IBD segments. If None, uses all individuals in the population.
+            j_idxs (list): List of individual indices to compare against for IBD segments. If None, uses all individuals in the population.
+            i_chrs (list): List of haplotype indices (0 to P-1) for individual i to extract segments from. Default is [0,1] (both haplotypes are checked).
+            j_chrs (list): List of haplotype indices (0 to P-1) for individual j to extract segments from. Default is [0,1] (both haplotypes are checked).
+        Returns:
+            IBD_segments (list): List of IBDSegment objects representing the IBD segments found between specified individuals.
+        '''
+        if isinstance(i_idxs, (int, np.integer)):
+            i_idxs = [i_idxs]
+        if isinstance(j_idxs, (int, np.integer)):
+            j_idxs = [j_idxs]
+        if i_idxs is None:
+            i_idxs = list(range(self.N))
+        if j_idxs is None:
+            j_idxs = list(range(self.N))
+
+        IBD_segments = []
+        for i in i_idxs:
+            for j in j_idxs:
+                if i in j_idxs and i >= j:
+                    continue # skips same individual and duplicate pairs
+                # gets IBD tensor between individuals i and j
+                IBD_tensor_ij = pop.get_true_IBD_tensor(self.Haplos[i,:,:], self.Haplos[j,:,:])
+                # gets list of IBD segments between individuals i and j
+                IBD_segments_ij = pop.IBD_tensor_to_segments(IBD_tensor_ij, i_chrs=i_chrs, j_chrs=j_chrs)
+                # adds individual i and j information to each segment
+                for seg in IBD_segments_ij:
+                    seg.i = i
+                    seg.j = j
+                # adds to running list
+                IBD_segments.extend(IBD_segments_ij)
+        return IBD_segments
+
 
     #######################
     #### Visualization ####
@@ -1631,18 +1679,18 @@ class Pedigree:
             self.data = data
         def __str__(self):
             lines = [
-                f"{k:20} {v['count']}"
+                f"{str(k):20} {v['count']}"
                 for k, v in self.data.items()
             ]
             return "\n".join(lines)
         def __repr__(self):
             return f"{self.__str__()}"
 
-    def count_relationships(self, attribute = 'relationship', idx: int = None) -> Dict[str, int]:
+    def count_relationships(self, attribute: list = ['relationship'], idx: int = None) -> Dict[str, int]:
         '''
         Counts the number of each type of relationship, or any other specified attribute of the RelObj, in the 'rels' dictionary.
         Parameters:
-            attribute (str): The attribute of the RelObj to summarize. Default is 'relationship'.
+            attribute (list): A list of attributes of the RelObj to summarize, where each unique combination of the provided attributes is summarized. If there is a period inside the attribute name, it is interpreted as accessing a nested attribute. Default is ['relationship'].
             idx (int): If specified, only counts relationships involving individual idx. Default is None, meaning all relationships are counted.
         Returns:
             rel_summary (Dict): Dictionary summarizing the number of each type of relationship.
@@ -1653,24 +1701,42 @@ class Pedigree:
             # only check first slot since the relationship of B to A is stored under (A,B)
             if idx is not None and rel_key[0] != idx: 
                 continue
-            rel_type = getattr(rel_obj, attribute)
-            if rel_type in rel_summary:
-                rel_summary[rel_type]['count'] += 1
-                rel_summary[rel_type]['keys'].append( (rel_key) )
+            
+            # checks if only a single attribute is provided
+            if isinstance(attribute, str):
+                attribute = [attribute]
+            attr_names = []
+            for attr in attribute:
+                # iterates through attr if nested attribute
+                attrs = attr.split('.')
+                val = rel_obj
+                for a in attrs:
+                    val = getattr(val, a)
+                attr_names.append( val )
+            
+            # stores attributes as a tuple if combinations of >1 are used for summary
+            if len(attr_names) == 1:
+                attr_names = attr_names[0]
             else:
-                rel_summary[rel_type] = {'count': 1,
+                attr_names = tuple(attr_names)
+            if attr_names in rel_summary:
+                rel_summary[attr_names]['count'] += 1
+                rel_summary[attr_names]['keys'].append( (rel_key) )
+            else:
+                rel_summary[attr_names] = {'count': 1,
                                          'keys': [(rel_key)]}
         # sorts keys
         rel_summary = dict(sorted(rel_summary.items()))
         return self.CountRelDict(rel_summary)
     
     @staticmethod
-    def summarize_per_relationship(count_rel_dict: 'Pedigree.CountRelDict', data: np.ndarray) -> Dict[str, Dict]:
+    def summarize_per_relationship(count_rel_dict: 'Pedigree.CountRelDict', data: np.ndarray, summary_stats: list = ['mean', 'std', 'min', 'max', 'count']) -> Dict[str, Dict]:
         '''
         Summarizes a specified data value of the inputted data matrix/dictionary per relationship type.
         Parameters:
             count_rel_dict (Pedigree.CountRelDict): The output of count_relationships() method.
             data (np.ndarray): Some object that when indexed by the keys provided in count_rel_dict[relationship]['keys'] returns some value which is to be summarized.
+            summary_stats (list): List of summary statistics to compute. Options are 'mean', 'std', 'min', 'max', and 'count'. Default is all five.
         Returns:
             rel_attribute_summary (Dict): Dictionary summarizing the specified attribute per relationship type. Mean, std, min, max, and count are provided.
         '''
@@ -1678,14 +1744,25 @@ class Pedigree:
         for rel_type, rel_info in count_rel_dict.data.items():
             values = []
             for key in rel_info['keys']:
+                if isinstance(data, dict):
+                    if key not in data:
+                        continue
                 value = data[key]
                 values.append(value)
+            if len(values) == 0:
+                continue
             values = np.array(values)
-            rel_attribute_summary[rel_type] = {
-                'mean': np.mean(values),
-                'std': np.std(values),
-                'min': np.min(values),
-                'max': np.max(values),
-                'count': len(values)
-            }
+            summary_dict = {}
+            for summary in summary_stats:
+                if summary == 'mean':
+                    summary_dict['mean'] = np.mean(values)
+                elif summary == 'std':
+                    summary_dict['std'] = np.std(values)
+                elif summary == 'min':
+                    summary_dict['min'] = np.min(values)
+                elif summary == 'max':
+                    summary_dict['max'] = np.max(values)
+                elif summary == 'count':
+                    summary_dict['count'] = len(values)
+            rel_attribute_summary[rel_type] = summary_dict
         return rel_attribute_summary

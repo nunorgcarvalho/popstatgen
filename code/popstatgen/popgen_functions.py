@@ -8,6 +8,7 @@ The functions here contain the documentation for the arguments and return values
 # imports
 import numpy as np
 from scipy import sparse
+from dataclasses import dataclass, field
 
 ################################################
 #### Genotype handling and basic statistics ####
@@ -217,6 +218,29 @@ def generate_LD_blocks(M: int, N_blocks: int = None,
         j_hotspots = np.random.choice(M, size=N_hotspots, replace=False)
         R[j_hotspots] = np.random.exponential(scale = 1 / hotspot_lambda, size = N_hotspots)
     return R
+
+def generate_chromosomes(M: int ,chrs: int = 1, meioses_per_chr: int = 1):
+    '''
+    Generates array of recombination rates that best approximates a specified number of chromosomes and meioses per chromosome.
+    '''
+    # gets number of variants per chromosome
+    R = np.zeros(M)
+    M_left = M
+    # splits whole genome into (mostly) even-lengthed chromosomes
+    # and sets recombinaton such that each chromosome has an expected meioses_per_chr crossovers per meiosis
+    for c in range(chrs):
+        M_c = int( np.ceil(M_left / (chrs - c)) )
+        start = M - M_left
+        stop = M - M_left + M_c
+        # sets recombination rates for chromosome
+        R[start : stop] = meioses_per_chr / M_c
+        if c > 1:
+            R[start] = 0.5 # independence between chromosomes
+            
+        M_left -= M_c
+
+    return np.array(R)
+        
 
 def draw_p_init(M, method: str, params: list) -> np.ndarray:
     '''
@@ -456,3 +480,99 @@ def compute_K_IBD(Haplos: np.ndarray, standardize: bool = False) -> np.ndarray:
         print(f'Mean relatedness before standardization: {K0}')
         K_IBD = (K_IBD - K0) / (1 - K0)
     return K_IBD
+
+@dataclass
+class IBDSegment:
+    #i: int = field(init=False) # index of individual i, not necessary
+    #j: int = field(init=False) # index of individual j, not necessary
+    start: int # start index (inclusive) of IBD segment
+    end: int # end index (inclusive) of IBD segment
+    i_chr: int # chromosome index of individual i
+    j_chr: int # chromosome index of individual j
+
+    @property
+    def length(self) -> int:
+        return self.end - self.start + 1
+
+def IBD_tensor_to_segments(IBD_tensor: np.ndarray, i_chrs: list = [0,1], j_chrs: list = [0,1]) -> list:
+    '''
+    Given an IBD tensor (M*P*P array; see pop.get_true_IBD_tensor()) between two individuals, extracts continuous IBD segments for each chromosome pair and stores in a list.
+    Parameters:
+        IBD_tensor (3D array): M*P*P array where each element at (m, p_i, p_j) indicates whether haplotype p_i of individual i and haplotype p_j of individual j are IBD1 at variant m.
+        i_chrs (list): List of haplotype indices (0 to P-1) for individual i to extract segments from. Default is [0,1] (both haplotypes are checked).
+        j_chrs (list): List of haplotype indices (0 to P-1) for individual j to extract segments from. Default is [0,1] (both haplotypes are checked).
+    '''
+    segments = []
+    for i_chr in i_chrs:
+        for j_chr in j_chrs:
+            IBD_vector = IBD_tensor[:, i_chr, j_chr].astype(np.int8)
+            IBD_vector = np.concatenate([[0], IBD_vector, [0]])  # padding to catch segments at ends
+            IBD_diff = np.diff(IBD_vector)
+            IBD_starts = np.where(IBD_diff == 1)[0]
+            IBD_ends = np.where(IBD_diff == -1)[0] - 1
+            if len(IBD_starts) != len(IBD_ends):
+                raise ValueError("Mismatch in number of IBD segment starts and ends. This shouldn't happen.")
+            for k in range(len(IBD_starts)):
+                segment = IBDSegment(start=IBD_starts[k], end=IBD_ends[k],
+                                     i_chr=i_chr, j_chr=j_chr)
+                segments.append(segment)
+
+    return segments
+
+def extract_crossover_points(seg: IBDSegment, M: int) -> list:
+    '''
+    Given an IBD segment, extracts the crossover point(s) that led to the start and end of the segment. This will return 2 indices if the IBD segment is not at the start or end of the chromosome. Crossover points are interpreted as happening at the index of the start of an IBD segment and the index right after the end of an IBD segment.
+    Parameters:
+        seg (IBDSegment): An IBDSegment object representing an IBD segment.
+        M (int): Total number of variants on the chromosome. Used to know if the segment ends at the end of the chromosome.
+    Returns:
+        tuple ((crossover_points, start_stop, chrs)):
+        Where:
+        - crossover_points (list): List of crossover point indices (0-based). Will contain 0, 1, or 2 indices depending on whether the segment starts at the beginning or ends at the end of the chromosome.
+        - start_stop (list): List indicating whether the corresponding crossover point is at the 'start' (0) or 'end' (1) of the segment.
+        - chrs (list): List consisting of a tuple denoting the chromosome index for individual i and individual j for the segment.
+    '''
+    crossover_points = []
+    start_stop = []
+    chrs = []
+    if seg.start > 0:
+        crossover_points.append(seg.start)
+        start_stop.append(0)
+    if seg.end < (M - 1):
+        crossover_points.append(seg.end + 1)
+        start_stop.append(1)
+
+    for _ in crossover_points:
+        chrs.append( (seg.i_chr, seg.j_chr) )
+    return (crossover_points, start_stop, chrs)
+
+def extract_all_crossover_points(segments: list, M: int) -> list:
+    '''
+    Extracts all crossover points from a list of IBD segments. See extract_crossover_points() for more details.
+    Parameters:
+        segments (list): List of IBDSegment objects representing IBD segments.
+        M (int): Total number of variants on the chromosome. Used to know if the segment ends at the end of the chromosome.
+    Returns:
+        tuple ((crossover_points, start_stop, chrs)):
+        Where:
+        - crossover_points (list): List of crossover point indices (0-based), sorted in ascending order by index. A crossover point may appear multiple times if it is shared by multiple segments. 
+        - start_stop (list): List indicating whether the corresponding crossover point is at the 'start' (0) or 'end' (1) of the segment.
+        - chrs (list): List consisting of a tuple denoting the chromosome index for individual i and individual j for the segment.
+
+    '''
+    crossover_points = []
+    start_stop = []
+    chrs = []
+    for seg in segments:
+        seg_crossover_points, seg_start_stop, seg_chrs = extract_crossover_points(seg, M)
+        crossover_points.extend(seg_crossover_points)
+        start_stop.extend(seg_start_stop)
+        chrs.extend(seg_chrs)
+    
+    # sorts crossover points by index, and maintains order for start/stop
+    sort_idx = np.argsort(np.array(crossover_points))
+    crossover_points = [crossover_points[i] for i in sort_idx]
+    start_stop = [start_stop[i] for i in sort_idx]
+    chrs = [chrs[i] for i in sort_idx]
+
+    return (crossover_points, start_stop, chrs)
